@@ -1,0 +1,1462 @@
+/* ============================================================
+   AGNINOVA FRONTEND
+   HTML + CSS + JavaScript
+   Backend: FastAPI
+   ============================================================ */
+
+
+/* BACKEND */
+
+const BACKEND_URL = (
+    window.__AGNINOVA_BACKEND_URL__ ||
+    "http://127.0.0.1:8000"
+).replace(/\/$/, "");
+
+
+/* GLOBAL */
+
+let currentWeather = null;
+let map = null;
+let forecastChart = null;
+let districtMarkers = [];
+
+let selectedDistrict = "Bengaluru Urban";
+
+
+/* ============================================================
+   INITIALIZATION
+   ============================================================ */
+
+document.addEventListener("DOMContentLoaded", () => {
+
+    initializeDistricts();
+
+    initializeMap();
+
+    checkBackend();
+
+    loadDashboard();
+
+    document
+        .getElementById("districtSelect")
+        .addEventListener("change", function () {
+
+            selectedDistrict = this.value;
+
+            loadDashboard();
+
+        });
+
+});
+
+
+/* ============================================================
+   NAVIGATION
+   ============================================================ */
+
+function showSection(sectionId) {
+
+    document.querySelectorAll(".section")
+        .forEach(section => {
+
+            section.classList.remove("active");
+
+        });
+
+
+    const section =
+        document.getElementById(sectionId);
+
+    if (section) {
+        section.classList.add("active");
+    }
+
+
+    document.querySelectorAll(".nav-item")
+        .forEach(item => {
+
+            item.classList.remove("active");
+
+        });
+
+
+    const navItems =
+        document.querySelectorAll(".nav-item");
+
+    navItems.forEach(item => {
+
+        const onclick =
+            item.getAttribute("onclick") || "";
+
+        if (onclick.includes(sectionId)) {
+            item.classList.add("active");
+        }
+
+    });
+
+
+    if (sectionId === "mapSection") {
+
+        setTimeout(() => {
+
+            if (map) {
+                map.invalidateSize();
+            }
+
+            loadGIS();
+
+        }, 200);
+
+    }
+
+
+    if (sectionId === "forecastSection") {
+        loadForecast();
+    }
+
+}
+
+
+/* ============================================================
+   DISTRICTS
+   ============================================================ */
+
+const districts = [
+
+    "Bagalkot",
+    "Ballari",
+    "Belagavi",
+    "Bengaluru Urban",
+    "Bengaluru Rural",
+    "Bidar",
+    "Chamarajanagar",
+    "Chikkaballapur",
+    "Chikkamagaluru",
+    "Chitradurga",
+    "Dakshina Kannada",
+    "Davanagere",
+    "Dharwad",
+    "Gadag",
+    "Hassan",
+    "Haveri",
+    "Kalaburagi",
+    "Kodagu",
+    "Kolar",
+    "Koppal",
+    "Mandya",
+    "Mysuru",
+    "Raichur",
+    "Ramanagara",
+    "Shivamogga",
+    "Tumakuru",
+    "Udupi",
+    "Uttara Kannada",
+    "Vijayapura",
+    "Yadgir",
+    "Vijayanagara"
+
+];
+
+
+function initializeDistricts() {
+
+    const select =
+        document.getElementById("districtSelect");
+
+    select.innerHTML = "";
+
+    districts.forEach(district => {
+
+        const option =
+            document.createElement("option");
+
+        option.value = district;
+
+        option.textContent = district;
+
+        if (district === selectedDistrict) {
+            option.selected = true;
+        }
+
+        select.appendChild(option);
+
+    });
+
+}
+
+
+/* ============================================================
+   BACKEND STATUS
+   ============================================================ */
+
+async function checkBackend() {
+
+    const dot =
+        document.getElementById("statusDot");
+
+    const text =
+        document.getElementById("connectionText");
+
+
+    try {
+
+        const response =
+            await fetch(`${BACKEND_URL}/test`);
+
+        if (!response.ok) {
+            throw new Error("Backend error");
+        }
+
+
+        dot.classList.add("online");
+
+        text.textContent =
+            "Backend Online";
+
+    }
+
+    catch (error) {
+
+        dot.classList.remove("online");
+
+        text.textContent =
+            "Backend Offline";
+
+        console.warn(
+            "FastAPI backend unavailable:",
+            error
+        );
+
+    }
+
+}
+
+
+/* ============================================================
+   DASHBOARD
+   ============================================================ */
+
+async function loadDashboard() {
+
+    await checkBackend();
+
+    await loadWeather();
+
+}
+
+
+/* ============================================================
+   WEATHER
+   ============================================================ */
+
+async function loadWeather() {
+
+    setLoadingState();
+
+
+    try {
+
+        const encoded =
+            encodeURIComponent(selectedDistrict);
+
+
+        const response =
+            await fetch(
+                `${BACKEND_URL}/weather/${encoded}`
+            );
+
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+        }
+
+
+        const data =
+            await response.json();
+
+
+        currentWeather = data;
+
+
+        renderWeather(data);
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Weather loading failed:",
+            error
+        );
+
+
+        document.getElementById("riskLevel")
+            .textContent = "BACKEND OFFLINE";
+
+
+        document.getElementById("advisory")
+            .textContent =
+            "Start the FastAPI backend to receive live weather intelligence.";
+
+
+        document.getElementById("riskBadge")
+            .textContent = "OFFLINE";
+
+    }
+
+}
+
+
+/* ============================================================
+   RENDER WEATHER
+   ============================================================ */
+
+function renderWeather(data) {
+
+    setValue(
+        "temperature",
+        formatNumber(data.temperature)
+    );
+
+    setValue(
+        "humidity",
+        formatNumber(data.humidity)
+    );
+
+    setValue(
+        "wind",
+        formatNumber(data.wind_speed)
+    );
+
+    setValue(
+        "heatIndex",
+        formatNumber(data.heat_index)
+    );
+
+    setValue(
+        "wbgt",
+        formatNumber(data.wbgt)
+    );
+
+    setValue(
+        "healthRisk",
+        formatNumber(data.health_risk)
+    );
+
+    setValue(
+        "thermalStress",
+        formatNumber(data.thermal_stress)
+    );
+
+
+    const level =
+        String(
+            data.risk_level || "UNKNOWN"
+        ).toUpperCase();
+
+
+    document.getElementById("riskLevel")
+        .textContent = level;
+
+
+    document.getElementById("riskBadge")
+        .textContent = level;
+
+
+    const score =
+        Number(data.risk_score || 0);
+
+
+    document.getElementById("riskMeter")
+        .style.width =
+        `${Math.max(0, Math.min(100, 100 - score))}%`;
+
+
+    document.getElementById("thermalBar")
+        .style.width =
+        `${Math.max(
+            0,
+            Math.min(100, Number(data.thermal_stress || 0))
+        )}%`;
+
+
+    document.getElementById("advisory")
+        .textContent =
+        data.advisory ||
+        "No advisory available.";
+
+
+    document.getElementById("weatherTime")
+        .textContent =
+        data.weather_time || "--";
+
+
+    applyRiskStyle(
+        document.getElementById("riskBadge"),
+        level
+    );
+
+}
+
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+
+function setValue(id, value) {
+
+    const element =
+        document.getElementById(id);
+
+    if (element) {
+        element.textContent = value;
+    }
+
+}
+
+
+function formatNumber(value) {
+
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return "--";
+    }
+
+
+    const number =
+        Number(value);
+
+
+    if (Number.isNaN(number)) {
+        return "--";
+    }
+
+
+    return number.toFixed(1);
+
+}
+
+
+function setLoadingState() {
+
+    const ids = [
+        "temperature",
+        "humidity",
+        "wind",
+        "heatIndex",
+        "wbgt",
+        "healthRisk",
+        "thermalStress"
+    ];
+
+    ids.forEach(id => {
+
+        document.getElementById(id)
+            .textContent = "...";
+
+    });
+
+}
+
+
+/* ============================================================
+   RISK STYLE
+   ============================================================ */
+
+function applyRiskStyle(element, level) {
+
+    element.style.color = "white";
+
+    if (level === "LOW") {
+
+        element.style.background =
+            "rgba(53,209,138,0.15)";
+
+        element.style.color =
+            "#35d18a";
+
+    }
+
+    else if (level === "MODERATE") {
+
+        element.style.background =
+            "rgba(255,212,71,0.15)";
+
+        element.style.color =
+            "#ffd447";
+
+    }
+
+    else if (level === "HIGH") {
+
+        element.style.background =
+            "rgba(255,157,61,0.15)";
+
+        element.style.color =
+            "#ff9d3d";
+
+    }
+
+    else if (level === "EXTREME") {
+
+        element.style.background =
+            "rgba(255,83,100,0.15)";
+
+        element.style.color =
+            "#ff5364";
+
+    }
+
+}
+
+
+/* ============================================================
+   MAP
+   ============================================================ */
+
+function initializeMap() {
+
+    if (map) {
+        return;
+    }
+
+
+    map =
+        L.map("map")
+            .setView(
+                [15.3173, 75.7139],
+                7
+            );
+
+
+    L.tileLayer(
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        {
+            attribution:
+                "&copy; OpenStreetMap contributors"
+        }
+    ).addTo(map);
+
+}
+
+
+/* ============================================================
+   GIS
+   ============================================================ */
+
+async function loadGIS() {
+
+    if (!map) {
+        initializeMap();
+    }
+
+
+    const districtList =
+        document.getElementById(
+            "districtList"
+        );
+
+
+    districtList.innerHTML =
+        `<div class="empty-state">
+            Loading live Karnataka heat risk...
+        </div>`;
+
+
+    try {
+
+        const response =
+            await fetch(
+                `${BACKEND_URL}/gis-risk`
+            );
+
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+        }
+
+
+        const data =
+            await response.json();
+
+
+        const records =
+            Array.isArray(data)
+                ? data
+                : data.districts || data.data || [];
+
+
+        renderGIS(records);
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "GIS error:",
+            error
+        );
+
+
+        districtList.innerHTML =
+            `<div class="empty-state">
+                Unable to load GIS data.
+                <br><br>
+                Make sure FastAPI is running.
+            </div>`;
+
+    }
+
+}
+
+
+/* ============================================================
+   RENDER GIS
+   ============================================================ */
+
+function renderGIS(records) {
+
+    clearMarkers();
+
+
+    const districtList =
+        document.getElementById(
+            "districtList"
+        );
+
+
+    districtList.innerHTML = "";
+
+
+    records.forEach(item => {
+
+        const lat =
+            Number(
+                item.latitude ??
+                item.lat
+            );
+
+
+        const lon =
+            Number(
+                item.longitude ??
+                item.lon
+            );
+
+
+        const score =
+            Number(
+                item.risk_score ??
+                item.health_risk ??
+                0
+            );
+
+
+        const level =
+            String(
+                item.risk_level ??
+                item.health_level ??
+                getRiskLevel(score)
+            ).toUpperCase();
+
+
+        const temperature =
+            Number(
+                item.temperature ??
+                item.temp ??
+                0
+            );
+
+
+        if (
+            Number.isNaN(lat) ||
+            Number.isNaN(lon)
+        ) {
+            return;
+        }
+
+
+        const color =
+            getRiskColor(level);
+
+
+        const marker =
+            L.circleMarker(
+                [lat, lon],
+                {
+                    radius: 10,
+
+                    color: color,
+
+                    fillColor: color,
+
+                    fillOpacity: 0.75,
+
+                    weight: 2
+                }
+            );
+
+
+        marker.bindPopup(`
+
+            <div style="font-family:Arial;min-width:180px">
+
+                <strong style="font-size:15px">
+                    ${item.location || "District"}
+                </strong>
+
+                <hr>
+
+                <b>Temperature:</b>
+                ${temperature.toFixed(1)} °C
+
+                <br>
+
+                <b>Humidity:</b>
+                ${Number(item.humidity || 0).toFixed(1)} %
+
+                <br>
+
+                <b>Heat Index:</b>
+                ${Number(item.heat_index || 0).toFixed(1)} °C
+
+                <br>
+
+                <b>WBGT:</b>
+                ${Number(item.wbgt || 0).toFixed(1)} °C
+
+                <br><br>
+
+                <strong style="color:${color}">
+                    ${level}
+                </strong>
+
+                <br>
+
+                Risk Score:
+                ${score.toFixed(1)}/100
+
+            </div>
+
+        `);
+
+
+        marker.addTo(map);
+
+        districtMarkers.push(marker);
+
+
+        const row =
+            document.createElement("div");
+
+
+        row.className =
+            "district-item";
+
+
+        row.innerHTML = `
+
+            <div>
+
+                <div class="district-name">
+                    ${item.location || "Unknown"}
+                </div>
+
+                <div class="district-temp">
+                    ${temperature.toFixed(1)} °C
+                    • Risk ${score.toFixed(0)}
+                </div>
+
+            </div>
+
+            <div
+                class="district-risk"
+                style="
+                    background:${color}22;
+                    color:${color};
+                "
+            >
+                ${level}
+            </div>
+
+        `;
+
+
+        row.onclick = () => {
+
+            map.setView(
+                [lat, lon],
+                10
+            );
+
+            marker.openPopup();
+
+        };
+
+
+        districtList.appendChild(row);
+
+    });
+
+}
+
+
+function clearMarkers() {
+
+    districtMarkers.forEach(
+        marker => map.removeLayer(marker)
+    );
+
+    districtMarkers = [];
+
+}
+
+
+function getRiskLevel(score) {
+
+    if (score < 25) {
+        return "LOW";
+    }
+
+    if (score < 50) {
+        return "MODERATE";
+    }
+
+    if (score < 75) {
+        return "HIGH";
+    }
+
+    return "EXTREME";
+
+}
+
+
+function getRiskColor(level) {
+
+    switch (level) {
+
+        case "LOW":
+            return "#35d18a";
+
+        case "MODERATE":
+            return "#ffd447";
+
+        case "HIGH":
+            return "#ff9d3d";
+
+        case "EXTREME":
+            return "#ff5364";
+
+        default:
+            return "#7d899d";
+
+    }
+
+}
+
+
+/* ============================================================
+   FORECAST
+   ============================================================ */
+
+async function loadForecast() {
+
+    const container =
+        document.getElementById(
+            "forecastCards"
+        );
+
+
+    container.innerHTML =
+        "Loading forecast...";
+
+
+    try {
+
+        const encoded =
+            encodeURIComponent(selectedDistrict);
+
+
+        const response =
+            await fetch(
+                `${BACKEND_URL}/forecast/${encoded}`
+            );
+
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+        }
+
+
+        const data =
+            await response.json();
+
+
+        const forecast =
+            Array.isArray(data)
+                ? data
+                : data.forecast || data.data || [];
+
+
+        renderForecast(forecast);
+
+    }
+
+    catch (error) {
+
+        console.error(error);
+
+        container.innerHTML =
+            `<div class="empty-state">
+                Forecast unavailable.
+            </div>`;
+
+    }
+
+}
+
+
+/* ============================================================
+   RENDER FORECAST
+   ============================================================ */
+
+function renderForecast(records) {
+
+    const container =
+        document.getElementById(
+            "forecastCards"
+        );
+
+
+    container.innerHTML = "";
+
+
+    const labels = [];
+
+    const temperatures = [];
+
+
+    records.forEach(item => {
+
+        const date =
+            item.date ||
+            item.time ||
+            "--";
+
+
+        const max =
+            Number(
+                item.temperature_max ??
+                item.temp_max ??
+                item.temperature ??
+                item.temperature_2m_max ??
+                0
+            );
+
+
+        const min =
+            Number(
+                item.temperature_min ??
+                item.temp_min ??
+                item.temperature_2m_min ??
+                0
+            );
+
+
+        labels.push(date);
+
+        temperatures.push(max);
+
+
+        const card =
+            document.createElement("div");
+
+
+        card.className =
+            "forecast-card";
+
+
+        card.innerHTML = `
+
+            <div class="date">
+                ${date}
+            </div>
+
+            <div class="temp">
+                ${max.toFixed(1)}°
+            </div>
+
+            <p>
+                Minimum:
+                ${min.toFixed(1)} °C
+            </p>
+
+            <p style="margin-top:6px">
+                Apparent:
+                ${Number(
+                    item.apparent_temperature_max || 0
+                ).toFixed(1)} °C
+            </p>
+
+            <p style="margin-top:6px">
+                Wind:
+                ${Number(
+                    item.wind_speed_max || 0
+                ).toFixed(1)} km/h
+            </p>
+
+        `;
+
+
+        container.appendChild(card);
+
+    });
+
+
+    renderForecastChart(
+        labels,
+        temperatures
+    );
+
+}
+
+
+/* ============================================================
+   CHART
+   ============================================================ */
+
+function renderForecastChart(
+    labels,
+    temperatures
+) {
+
+    const canvas =
+        document.getElementById(
+            "forecastChart"
+        );
+
+
+    if (!canvas) {
+        return;
+    }
+
+
+    if (forecastChart) {
+        forecastChart.destroy();
+    }
+
+
+    forecastChart =
+        new Chart(
+            canvas,
+            {
+                type: "line",
+
+                data: {
+
+                    labels: labels,
+
+                    datasets: [
+
+                        {
+                            label:
+                                "Maximum Temperature (°C)",
+
+                            data:
+                                temperatures,
+
+                            borderWidth: 3,
+
+                            tension: 0.35,
+
+                            fill: true
+                        }
+
+                    ]
+
+                },
+
+                options: {
+
+                    responsive: true,
+
+                    maintainAspectRatio: false,
+
+                    plugins: {
+
+                        legend: {
+                            labels: {
+                                color: "#aab4c4"
+                            }
+                        }
+
+                    },
+
+                    scales: {
+
+                        x: {
+                            ticks: {
+                                color: "#758095"
+                            },
+
+                            grid: {
+                                color:
+                                    "rgba(255,255,255,0.04)"
+                            }
+                        },
+
+                        y: {
+                            ticks: {
+                                color: "#758095"
+                            },
+
+                            grid: {
+                                color:
+                                    "rgba(255,255,255,0.04)"
+                            }
+                        }
+
+                    }
+
+                }
+
+            }
+        );
+
+}
+
+
+/* ============================================================
+   AI ASSISTANT
+   =====================
+function handleAIKey(event) {
+
+    if (event.key === "Enter") {
+        sendAI();
+    }
+
+}
+
+
+function askAI(question) {
+
+    document.getElementById("aiInput")
+        .value = question;
+
+    sendAI();
+
+}
+
+
+async function sendAI() {
+
+    const input =
+        document.getElementById("aiInput");
+
+
+    const question =
+        input.value.trim();
+
+
+    if (!question) {
+        return;
+    }
+
+
+    addChatMessage(
+        question,
+        "user"
+    );
+
+
+    input.value = "";
+
+
+    try {
+
+        const response =
+            await fetch(
+                `${BACKEND_URL}/ai/chat`,
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        message: question,
+                        location:
+                            selectedDistrict
+                    })
+                }
+            );
+
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+        }
+
+
+        const data =
+            await response.json();
+
+
+        const answer =
+            data.answer ||
+            data.response ||
+            data.message ||
+            "I could not generate a response.";
+
+
+        addChatMessage(
+            answer,
+            "ai"
+        );
+
+    }
+
+    catch (error) {
+
+        console.warn(
+            "AI backend unavailable",
+            error
+        );
+
+
+        addChatMessage(
+            generateLocalAIResponse(question),
+            "ai"
+        );
+
+    }
+
+}
+
+
+function addChatMessage(
+    text,
+    type
+) {
+
+    const container =
+        document.getElementById(
+            "chatMessages"
+        );
+
+
+    const message =
+        document.createElement("div");
+
+
+    message.className =
+        `message ${type}`;
+
+
+    message.innerHTML = `
+
+        <div class="avatar">
+            ${type === "ai" ? "✦" : "●"}
+        </div>
+
+        <div class="bubble">
+            ${escapeHTML(text)}
+        </div>
+
+    `;
+
+
+    container.appendChild(message);
+
+
+    container.scrollTop =
+        container.scrollHeight;
+
+}
+
+
+function generateLocalAIResponse(question) {
+
+    const q =
+        question.toLowerCase();
+
+
+    if (
+        q.includes("risk") &&
+        currentWeather
+    ) {
+
+        return `
+            ${selectedDistrict} currently has a
+            ${currentWeather.risk_level || "UNKNOWN"}
+            heat risk with a health-risk score of
+            ${Number(
+                currentWeather.health_risk || 0
+            ).toFixed(0)}/100.
+        `;
+
+    }
+
+
+    if (
+        q.includes("wbgt")
+    ) {
+
+        return `
+            WBGT stands for Wet Bulb Globe Temperature.
+            It is a heat-stress indicator that considers
+            environmental heat conditions. AGNINOVA uses
+            an approximate prototype estimate for screening.
+        `;
+
+    }
+
+
+    if (
+        q.includes("precaution") ||
+        q.includes("safe") ||
+        q.includes("protect")
+    ) {
+
+        return `
+            Stay hydrated, reduce prolonged outdoor exposure,
+            take frequent breaks in cool areas, avoid strenuous
+            activity during peak heat and give special attention
+            to vulnerable people.
+        `;
+
+    }
+
+
+    return `
+        I am monitoring ${selectedDistrict}.
+        Ask me about heat risk, WBGT, thermal stress,
+        forecast conditions or safety precautions.
+    `;
+
+}
+
+
+/* ============================================================
+   HTML ESCAPE
+   ============================================================ */
+
+function escapeHTML(value) {
+
+    const div =
+        document.createElement("div");
+
+    div.textContent = value;
+
+    return div.innerHTML;
+
+}
+
+
+/* ============================================================
+   EMERGENCY ALERT
+   ============================================================ */
+
+function triggerEmergencyAlert() {
+
+    const modal =
+        document.getElementById(
+            "emergencyModal"
+        );
+
+
+    document.getElementById(
+        "alertDistrict"
+    ).textContent =
+        selectedDistrict;
+
+
+    modal.classList.add("show");
+
+
+    addAlertRecord();
+
+}
+
+
+function closeEmergencyAlert() {
+
+    document.getElementById(
+        "emergencyModal"
+    ).classList.remove("show");
+
+}
+
+
+function addAlertRecord() {
+
+    const container =
+        document.getElementById(
+            "alertHistory"
+        );
+
+
+    const empty =
+        container.querySelector(
+            ".empty-state"
+        );
+
+
+    if (empty) {
+        empty.remove();
+    }
+
+
+    const record =
+        document.createElement("div");
+
+
+    record.className =
+        "alert-record";
+
+
+    const now =
+        new Date()
+            .toLocaleTimeString();
+
+
+    record.innerHTML = `
+
+        <strong>
+            🚨 Heat Emergency Alert
+        </strong>
+
+        <br>
+
+        District:
+        ${escapeHTML(selectedDistrict)}
+
+        <br>
+
+        Issued:
+        ${now}
+
+        <br>
+
+        <span style="color:#ff6571">
+            Temporary demonstration alert
+        </span>
+
+    `;
+
+
+    container.prepend(record);
+
+}

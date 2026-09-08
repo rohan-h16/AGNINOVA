@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>AGNINOVA | Extreme Heat Intelligence</title>
+
+    <!-- Leaflet -->
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <!-- Google Font -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="style.css">
+
+    <script>
+        window.__AGNINOVA_BACKEND_URL__ = "https://your-backend-domain.com";
+    </script>
+</head>
+
+<body>
+
+<div class="app">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+
+        <div class="brand">
+            <div class="brand-icon">🔥</div>
+
+            <div>
+                <h1>AGNINOVA</h1>
+                <span>Heat Intelligence</span>
+            </div>
+        </div>
+
+        <nav>
+
+            <button class="nav-item active" onclick="showSection('dashboard')">
+                <span>◈</span>
+                Dashboard
+            </button>
+
+            <button class="nav-item" onclick="showSection('mapSection')">
+                <span>⌖</span>
+                Karnataka GIS
+            </button>
+
+            <button class="nav-item" onclick="showSection('forecastSection')">
+                <span>◷</span>
+                Forecast
+            </button>
+
+            <button class="nav-item" onclick="showSection('alertsSection')">
+                <span>⚠</span>
+                Emergency Alerts
+            </button>
+
+            <button class="nav-item" onclick="showSection('aiSection')">
+                <span>✦</span>
+                AI Assistant
+            </button>
+
+        </nav>
+
+        <div class="sidebar-bottom">
+
+            <div class="system-status">
+                <span id="statusDot"></span>
+
+                <div>
+                    <strong id="connectionText">Backend Offline</strong>
+                    <small>AGNINOVA API</small>
+                </div>
+            </div>
+
+            <div class="version">
+                SIH 2026 • Prototype
+            </div>
+
+        </div>
+
+    </aside>
+
+
+    <!-- MAIN -->
+    <main class="main">
+
+        <!-- TOPBAR -->
+        <header class="topbar">
+
+            <div>
+                <div class="eyebrow">KARNATAKA • HEATWAVE INTELLIGENCE</div>
+
+                <h2>
+                    Extreme Heat
+                    <span>Command Center</span>
+                </h2>
+            </div>
+
+            <div class="top-actions">
+
+                <div class="live-indicator">
+                    <span></span>
+                    LIVE
+                </div>
+
+                <button class="refresh-btn" onclick="loadDashboard()">
+                    ↻ Refresh
+                </button>
+
+            </div>
+
+        </header>
+
+
+        <!-- DASHBOARD -->
+        <section id="dashboard" class="section active">
+
+            <!-- HERO -->
+            <div class="hero">
+
+                <div class="hero-content">
+
+                    <div class="hero-tag">
+                        AI-POWERED EARLY WARNING PLATFORM
+                    </div>
+
+                    <h3>
+                        Predicting heat stress.
+                        <br>
+                        Protecting communities.
+                    </h3>
+
+                    <p>
+                        Real-time weather intelligence, thermal stress
+                        analysis and district-level heat risk monitoring
+                        for Karnataka.
+                    </p>
+
+                    <div class="hero-actions">
+
+                        <button
+                            class="primary-btn"
+                            onclick="showSection('mapSection')"
+                        >
+                            Explore Karnataka GIS →
+                        </button>
+
+                        <button
+                            class="secondary-btn"
+                            onclick="triggerEmergencyAlert()"
+                        >
+                            🚨 Emergency Alert
+                        </button>
+
+                    </div>
+
+                </div>
+
+                <div class="hero-orb">
+                    <div class="orb-core">
+                        <span>AI</span>
+                        <small>HEAT RISK</small>
+                    </div>
+                </div>
+
+            </div>
+
+
+            <!-- DISTRICT SELECT -->
+            <div class="control-card">
+
+                <div>
+                    <span class="label">MONITORING DISTRICT</span>
+
+                    <select id="districtSelect">
+                        <option value="Bengaluru Urban">
+                            Bengaluru Urban
+                        </option>
+                    </select>
+                </div>
+
+                <div class="last-update">
+                    <span>LAST UPDATE</span>
+                    <strong id="weatherTime">--</strong>
+                </div>
+
+            </div>
+
+
+            <!-- WEATHER CARDS -->
+            <div class="metrics-grid">
+
+                <div class="metric-card">
+
+                    <div class="metric-icon">🌡️</div>
+
+                    <span>Temperature</span>
+
+                    <strong id="temperature">
+                        --
+                    </strong>
+
+                    <small>°C</small>
+
+                </div>
+
+
+                <div class="metric-card">
+
+                    <div class="metric-icon">💧</div>
+
+                    <span>Humidity</span>
+
+                    <strong id="humidity">
+                        --
+                    </strong>
+
+                    <small>%</small>
+
+                </div>
+
+
+                <div class="metric-card">
+
+                    <div class="metric-icon">🌬️</div>
+
+                    <span>Wind Speed</span>
+
+                    <strong id="wind">
+                        --
+                    </strong>
+
+                    <small>km/h</small>
+
+                </div>
+
+
+                <div class="metric-card">
+
+                    <div class="metric-icon">🥵</div>
+
+                    <span>Heat Index</span>
+
+                    <strong id="heatIndex">
+                        --
+                    </strong>
+
+                    <small>°C</small>
+
+                </div>
+
+
+                <div class="metric-card">
+
+                    <div class="metric-icon">☀️</div>
+
+                    <span>WBGT</span>
+
+                    <strong id="wbgt">
+                        --
+                    </strong>
+
+                    <small>°C</small>
+
+                </div>
+
+
+                <div class="metric-card risk-card">
+
+                    <div class="metric-icon">⚠️</div>
+
+                    <span>Health Risk</span>
+
+                    <strong id="healthRisk">
+                        --
+                    </strong>
+
+                    <small>/100</small>
+
+                </div>
+
+            </div>
+
+
+            <!-- RISK PANEL -->
+            <div class="risk-layout">
+
+                <div class="risk-panel">
+
+                    <div class="panel-heading">
+
+                        <div>
+                            <span class="label">CURRENT THREAT LEVEL</span>
+
+                            <h3 id="riskLevel">
+                                WAITING FOR DATA
+                            </h3>
+                        </div>
+
+                        <div id="riskBadge" class="risk-badge">
+                            --
+                        </div>
+
+                    </div>
+
+
+                    <div class="risk-meter">
+
+                        <div class="meter-track">
+                            <div
+                                id="riskMeter"
+                                class="meter-fill"
+                                style="width:0%"
+                            ></div>
+                        </div>
+
+                        <div class="meter-labels">
+                            <span>LOW</span>
+                            <span>MODERATE</span>
+                            <span>HIGH</span>
+                            <span>EXTREME</span>
+                        </div>
+
+                    </div>
+
+
+                    <div class="advisory">
+
+                        <div class="advisory-icon">
+                            🛡️
+                        </div>
+
+                        <div>
+                            <span>PUBLIC HEALTH ADVISORY</span>
+
+                            <p id="advisory">
+                                Waiting for weather intelligence...
+                            </p>
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- THERMAL STRESS -->
+                <div class="stress-panel">
+
+                    <div class="panel-title">
+                        <span>HUMAN THERMAL STRESS</span>
+                    </div>
+
+                    <div class="stress-number">
+
+                        <strong id="thermalStress">
+                            --
+                        </strong>
+
+                        <span>/100</span>
+
+                    </div>
+
+                    <div class="stress-bar">
+                        <div
+                            id="thermalBar"
+                            style="width:0%"
+                        ></div>
+                    </div>
+
+                    <p>
+                        Combined assessment of temperature,
+                        humidity, heat index, WBGT and wind conditions.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <!-- SYSTEM PIPELINE -->
+            <div class="pipeline-card">
+
+                <div class="section-heading">
+
+                    <div>
+                        <span class="label">AGNINOVA INTELLIGENCE ENGINE</span>
+                        <h3>Risk Detection Pipeline</h3>
+                    </div>
+
+                </div>
+
+                <div class="pipeline">
+
+                    <div class="pipeline-step">
+                        <span>01</span>
+                        <strong>Weather</strong>
+                        <small>Open-Meteo</small>
+                    </div>
+
+                    <div class="pipeline-line"></div>
+
+                    <div class="pipeline-step">
+                        <span>02</span>
+                        <strong>Heat Index</strong>
+                        <small>Thermal Analysis</small>
+                    </div>
+
+                    <div class="pipeline-line"></div>
+
+                    <div class="pipeline-step">
+                        <span>03</span>
+                        <strong>WBGT</strong>
+                        <small>Heat Exposure</small>
+                    </div>
+
+                    <div class="pipeline-line"></div>
+
+                    <div class="pipeline-step">
+                        <span>04</span>
+                        <strong>AI Risk</strong>
+                        <small>Health Threat</small>
+                    </div>
+
+                    <div class="pipeline-line"></div>
+
+                    <div class="pipeline-step">
+                        <span>05</span>
+                        <strong>Alert</strong>
+                        <small>Public Safety</small>
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- MAP -->
+        <section id="mapSection" class="section">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="label">GEOSPATIAL INTELLIGENCE</span>
+
+                    <h2>
+                        Karnataka Heat Risk Map
+                    </h2>
+
+                    <p>
+                        Live district-level thermal risk monitoring.
+                    </p>
+                </div>
+
+                <button class="primary-btn" onclick="loadGIS()">
+                    ↻ Update Map
+                </button>
+
+            </div>
+
+
+            <div class="map-layout">
+
+                <div class="map-card">
+
+                    <div id="map"></div>
+
+                    <div class="map-legend">
+
+                        <strong>HEAT RISK</strong>
+
+                        <div>
+                            <i class="legend-low"></i>
+                            Low
+                        </div>
+
+                        <div>
+                            <i class="legend-moderate"></i>
+                            Moderate
+                        </div>
+
+                        <div>
+                            <i class="legend-high"></i>
+                            High
+                        </div>
+
+                        <div>
+                            <i class="legend-extreme"></i>
+                            Extreme
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <div class="district-list-card">
+
+                    <div class="panel-title">
+                        <span>DISTRICT STATUS</span>
+                    </div>
+
+                    <div id="districtList">
+                        Loading districts...
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- FORECAST -->
+        <section id="forecastSection" class="section">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="label">WEATHER INTELLIGENCE</span>
+
+                    <h2>
+                        5-Day Heat Forecast
+                    </h2>
+
+                    <p>
+                        Forecast-based heat exposure outlook.
+                    </p>
+                </div>
+
+            </div>
+
+
+            <div class="forecast-chart-card">
+
+                <canvas id="forecastChart"></canvas>
+
+            </div>
+
+
+            <div id="forecastCards" class="forecast-grid">
+                Loading forecast...
+            </div>
+
+        </section>
+
+
+        <!-- ALERTS -->
+        <section id="alertsSection" class="section">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="label">EMERGENCY RESPONSE</span>
+
+                    <h2>
+                        Emergency Alert Center
+                    </h2>
+
+                    <p>
+                        Temporary prototype alert system.
+                    </p>
+
+                </div>
+
+                <button
+                    class="danger-btn"
+                    onclick="triggerEmergencyAlert()"
+                >
+                    🚨 ISSUE ALERT
+                </button>
+
+            </div>
+
+
+            <div class="alert-control-card">
+
+                <div class="alert-symbol">
+                    🚨
+                </div>
+
+                <div>
+
+                    <h3>
+                        Karnataka Heat Emergency Broadcast
+                    </h3>
+
+                    <p>
+                        Trigger a simulated emergency heat warning
+                        for demonstration purposes.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <div id="alertHistory" class="alert-history">
+
+                <div class="empty-state">
+                    No alerts issued in this session.
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- AI -->
+        <section id="aiSection" class="section">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="label">ARTIFICIAL INTELLIGENCE</span>
+
+                    <h2>
+                        AGNINOVA AI Assistant
+                    </h2>
+
+                    <p>
+                        Ask questions about heat risk and public safety.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <div class="ai-layout">
+
+                <div class="ai-info">
+
+                    <div class="ai-logo">
+                        ✦
+                    </div>
+
+                    <h3>
+                        Heat Intelligence Assistant
+                    </h3>
+
+                    <p>
+                        Get simple explanations of temperature,
+                        thermal stress, health risk and emergency
+                        precautions.
+                    </p>
+
+                    <div class="quick-prompts">
+
+                        <button onclick="askAI('What is the current heat risk?')">
+                            Current heat risk
+                        </button>
+
+                        <button onclick="askAI('What precautions should people take?')">
+                            Safety precautions
+                        </button>
+
+                        <button onclick="askAI('Explain WBGT')">
+                            Explain WBGT
+                        </button>
+
+                    </div>
+
+                </div>
+
+
+                <div class="chat-card">
+
+                    <div id="chatMessages" class="chat-messages">
+
+                        <div class="message ai">
+
+                            <div class="avatar">
+                                ✦
+                            </div>
+
+                            <div class="bubble">
+                                Hello! I am AGNINOVA's heat intelligence
+                                assistant. Ask me about the current
+                                heat conditions.
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="chat-input">
+
+                        <input
+                            id="aiInput"
+                            type="text"
+                            placeholder="Ask about heat risk..."
+                            onkeydown="handleAIKey(event)"
+                        >
+
+                        <button onclick="sendAI()">
+                            →
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- FOOTER -->
+        <footer>
+
+            <div>
+                <strong>AGNINOVA</strong>
+                <span>
+                    Extreme Heatwave Early Warning & Human Thermal Stress Platform
+                </span>
+            </div>
+
+            <span>
+                Smart India Hackathon 2026
+            </span>
+
+        </footer>
+
+    </main>
+
+</div>
+
+
+<!-- EMERGENCY MODAL -->
+<div id="emergencyModal" class="modal">
+
+    <div class="modal-box">
+
+        <div class="modal-warning">
+            🚨
+        </div>
+
+        <h2>
+            EXTREME HEAT ALERT
+        </h2>
+
+        <p>
+            AGNINOVA has issued a temporary emergency heat warning
+            for the selected district.
+        </p>
+
+        <strong id="alertDistrict">
+            --
+        </strong>
+
+        <button onclick="closeEmergencyAlert()">
+            ACKNOWLEDGE ALERT
+        </button>
+
+    </div>
+
+</div>
+
+
+<!-- Leaflet -->
+<script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+</script>
+
+<!-- Chart.js -->
+<script
+    src="https://cdn.jsdelivr.net/npm/chart.js">
+</script>
+
+<script src="script.js"></script>
+
+</body>
+</html>
