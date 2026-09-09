@@ -59,6 +59,10 @@ OPEN_METEO_URL = (
     "https://api.open-meteo.com/v1/forecast"
 )
 
+OPEN_METEO_ARCHIVE_URL = (
+    "https://archive-api.open-meteo.com/v1/archive"
+)
+
 DB_FILE = os.path.join(
     os.path.dirname(__file__),
     "heatwave.db"
@@ -211,23 +215,23 @@ def get_india_working_hours_profile(
     seasonal_shift = 0
 
     if month in {3, 4, 5, 6}:
-        seasonal_shift = 4
+        seasonal_shift = 2.5
     elif month in {2, 7, 8, 9}:
-        seasonal_shift = 2
+        seasonal_shift = 1.2
 
-    district_bias = sum(ord(ch) for ch in str(location)) % 5
+    district_bias = (sum(ord(ch) for ch in str(location)) % 4) * 0.25
     times = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]
-    baseline = [0.76, 0.86, 1.08, 1.18, 1.12, 0.94]
+    baseline = [0.70, 0.82, 0.94, 1.02, 0.96, 0.78]
     profile = []
 
     for index, clock in enumerate(times):
-        high = temperature * baseline[index] + seasonal_shift + district_bias * 0.4
-        low = max(18, high - 6.5 - (humidity / 25))
-        heat_index = high + (humidity / 100) * 5.5
+        high = temperature * baseline[index] + seasonal_shift + district_bias
+        low = max(20, high - 5.5 - (humidity / 30))
+        heat_index = high + (humidity / 100) * 4.8
         risk = clamp(
-            ((high - 24) / 18) * 62
-            + ((humidity - 25) / 65) * 24
-            + ((heat_index - 30) / 18) * 18
+            ((high - 28) / 16) * 42
+            + ((humidity - 35) / 50) * 18
+            + ((heat_index - 31) / 15) * 18
         )
 
         profile.append({
@@ -956,6 +960,49 @@ async def open_meteo_request(latitude, longitude):
     return response.json()
 
 
+async def open_meteo_historical_request(latitude, longitude, days=45):
+
+    end_date = datetime.now(timezone.utc).date().isoformat()
+    start_date = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily": "temperature_2m_max,temperature_2m_min,apparent_temperature_max,wind_speed_10m_max,precipitation_probability_max",
+        "timezone": "auto",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.get(OPEN_METEO_ARCHIVE_URL, params=params)
+    except httpx.RequestError:
+        return {}
+
+    if response.status_code != 200:
+        return {}
+
+    return response.json()
+
+
+def blend_with_historical_baseline(
+    live_value,
+    historical_value,
+    live_weight=0.7,
+    history_weight=0.3
+):
+
+    if historical_value is None or historical_value == 0:
+        return float(live_value or 0)
+
+    return round(
+        (live_weight * float(live_value or 0))
+        + (history_weight * float(historical_value or 0)),
+        2
+    )
+
+
 # ============================================================
 # DISTRICT LOOKUP
 # ============================================================
@@ -1591,6 +1638,17 @@ async def forecast(
     )
 
     latitude, longitude = coords
+    historical = await open_meteo_historical_request(latitude, longitude, days=45)
+
+    historical_by_day = {}
+    if historical and historical.get("daily"):
+        for index, date in enumerate(historical["daily"].get("time", [])[:30]):
+            historical_by_day[date] = {
+                "max": historical["daily"].get("temperature_2m_max", [None] * 30)[index],
+                "min": historical["daily"].get("temperature_2m_min", [None] * 30)[index],
+                "apparent": historical["daily"].get("apparent_temperature_max", [None] * 30)[index],
+                "wind": historical["daily"].get("wind_speed_10m_max", [None] * 30)[index],
+            }
 
     if TOMORROW_API_KEY:
         raw = await tomorrow_request(
@@ -1671,14 +1729,27 @@ async def forecast(
             wind_speed = get_weather_value(values, "windSpeed") * 3.6
             uv_index = get_weather_value(values, "uvIndex", 0)
             precipitation_probability = get_weather_value(values, "precipitationProbability", 0)
-            heat_index = calculate_heat_index(temperature, humidity)
-            wbgt = calculate_wbgt(temperature, humidity, wind_speed)
-            thermal_stress = calculate_thermal_stress(temperature, humidity, heat_index, wbgt, wind_speed)
+
+            historical_day = historical_by_day.get(date, {})
+            historical_max = historical_day.get("max")
+            historical_min = historical_day.get("min")
+            historical_apparent = historical_day.get("apparent")
+            historical_wind = historical_day.get("wind")
+
+            temperature_max = blend_with_historical_baseline(max(temperatures), historical_max, 0.72, 0.28)
+            temperature_min = blend_with_historical_baseline(min(temperatures), historical_min, 0.68, 0.32)
+            apparent_temperature_max = blend_with_historical_baseline(apparent_temperature, historical_apparent, 0.7, 0.3)
+            wind_speed_max = blend_with_historical_baseline(wind_speed, historical_wind, 0.7, 0.3)
+
+            humidity = clamp((humidity * 0.65) + (40 + ((temperature_max - 20) * 2.8) * 0.35), 20, 95)
+            heat_index = calculate_heat_index(temperature_max, humidity)
+            wbgt = calculate_wbgt(temperature_max, humidity, wind_speed_max)
+            thermal_stress = calculate_thermal_stress(temperature_max, humidity, heat_index, wbgt, wind_speed_max)
             health_risk = calculate_forecast_health_risk(
-                temperature,
+                temperature_max,
                 humidity,
-                wind_speed,
-                apparent_temperature,
+                wind_speed_max,
+                apparent_temperature_max,
                 uv_index,
                 precipitation_probability
             )
@@ -1686,12 +1757,12 @@ async def forecast(
 
             result.append({
                 "date": date,
-                "temperature": round(temperature, 2),
-                "temperature_min": round(min(temperatures), 2),
-                "temperature_max": round(max(temperatures), 2),
+                "temperature": round(temperature_max, 2),
+                "temperature_min": round(temperature_min, 2),
+                "temperature_max": round(temperature_max, 2),
                 "humidity": round(humidity, 2),
-                "wind_speed": round(wind_speed, 2),
-                "apparent_temperature": round(apparent_temperature, 2),
+                "wind_speed": round(wind_speed_max, 2),
+                "apparent_temperature": round(apparent_temperature_max, 2),
                 "heat_index": round(heat_index, 2),
                 "wbgt": round(wbgt, 2),
                 "thermal_stress": round(thermal_stress, 2),
@@ -1700,7 +1771,7 @@ async def forecast(
                 "risk_score": round(health_risk, 2),
                 "risk_level": risk_level,
                 "advisory": get_advisory(risk_level),
-                "data_source": "Tomorrow.io",
+                "data_source": "Tomorrow.io + historical baseline",
                 "uv_index": round(uv_index, 2),
                 "precipitation_probability": round(precipitation_probability, 2)
             })
@@ -1747,6 +1818,15 @@ async def forecast(
         if isinstance(precipitation_probability, list):
             precipitation_probability = precipitation_probability[index]
 
+        historical_day = historical_by_day.get(date, {})
+        historical_max = historical_day.get("max")
+        historical_min = historical_day.get("min")
+        historical_apparent = historical_day.get("apparent")
+
+        temperature_max = blend_with_historical_baseline(temperature_max, historical_max, 0.7, 0.3)
+        temperature_min = blend_with_historical_baseline(temperature_min, historical_min, 0.7, 0.3)
+        apparent_temperature_max = blend_with_historical_baseline(apparent_temperature_max, historical_apparent, 0.7, 0.3)
+
         humidity = 40 + (index * 6) + (temperature_max * 0.8)
         humidity = clamp(humidity, 20, 95)
         heat_index = calculate_heat_index(temperature_max, humidity)
@@ -1778,7 +1858,7 @@ async def forecast(
             "risk_score": round(health_risk, 2),
             "risk_level": risk_level,
             "advisory": get_advisory(risk_level),
-            "data_source": "Open-Meteo",
+            "data_source": "Open-Meteo + historical baseline",
             "uv_index": round(uv_index_max, 2),
             "precipitation_probability": round(precipitation_probability, 2)
         })

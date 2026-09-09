@@ -24,6 +24,12 @@ class HistoricalForecastTests(unittest.TestCase):
         answer = generate_ai_answer("What is the current heat risk?", "Bengaluru Urban", 35, 60)
         self.assertIn("risk", answer.lower())
 
+    def test_workday_profile_stays_realistic(self):
+        profile = get_india_working_hours_profile("Bengaluru Urban", 35, 60, month=4)
+        midday = next(item for item in profile if item["time"] == "12:00")
+        self.assertLess(midday["temperature_high"], 42)
+        self.assertLess(midday["risk_score"], 90)
+
 
 if __name__ == "__main__":
     unittest.main()

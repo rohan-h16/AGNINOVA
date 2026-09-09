@@ -1257,23 +1257,27 @@ function generateHistoricalForecast(location) {
     const baseTemp = currentWeather ? Number(currentWeather.temperature || 32) : 32;
     const baseHumidity = currentWeather ? Number(currentWeather.humidity || 58) : 58;
     const hours = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"];
+    const factors = [0.70, 0.82, 0.94, 1.02, 0.96, 0.78];
     const records = [];
 
     hours.forEach((time, index) => {
-        const factor = [0.76, 0.86, 1.08, 1.18, 1.12, 0.94][index];
-        const high = baseTemp * factor + 2.5;
-        const low = Math.max(18, high - 6.5 - (baseHumidity / 28));
+        const factor = factors[index];
+        const high = baseTemp * factor + 1.6;
+        const low = Math.max(20, high - 5.6 - (baseHumidity / 30));
+        const heatIndex = high + (baseHumidity / 100) * 4.8;
+        const risk = Math.min(100, ((high - 28) / 16) * 42 + ((baseHumidity - 35) / 50) * 18 + ((heatIndex - 31) / 15) * 18);
+
         records.push({
             date: time,
             temperature_max: high,
             temperature_min: low,
             temperature: high,
-            apparent_temperature_max: high + 2.8,
-            wind_speed_max: 10 + (index * 2),
-            wind_speed: 10 + (index * 2),
+            apparent_temperature_max: heatIndex,
+            wind_speed_max: 9 + (index * 1.6),
+            wind_speed: 9 + (index * 1.6),
             hourly_label: time,
             location,
-            risk_score: Math.min(100, ((high - 25) / 18) * 65 + ((baseHumidity - 25) / 65) * 25)
+            risk_score: risk
         });
     });
 
