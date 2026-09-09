@@ -26,7 +26,7 @@ app = FastAPI(
 
 
 def get_active_weather_provider():
-    return "Open-Meteo"
+    return "Tomorrow.io"
 
 
 # ============================================================
@@ -48,7 +48,7 @@ app.add_middleware(
 
 TOMORROW_API_KEY = os.getenv(
     "TOMORROW_API_KEY",
-    ""
+    "u3aoBw2R9qS7IhKWPWSY5gH4FhGuexQG"
 ).strip()
 
 TOMORROW_URL = (
@@ -57,14 +57,6 @@ TOMORROW_URL = (
 
 TOMORROW_FORECAST_URL = (
     "https://api.tomorrow.io/v4/weather/forecast"
-)
-
-OPEN_METEO_URL = (
-    "https://api.open-meteo.com/v1/forecast"
-)
-
-OPEN_METEO_ARCHIVE_URL = (
-    "https://archive-api.open-meteo.com/v1/archive"
 )
 
 DB_FILE = os.path.join(
@@ -935,61 +927,6 @@ def get_weather_code_label(weather_code):
     return mapping.get(weather_code, "Current weather")
 
 
-async def open_meteo_request(latitude, longitude):
-
-    params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "current": "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,pressure_msl,cloud_cover,weather_code",
-        "daily": "temperature_2m_max,temperature_2m_min,apparent_temperature_max,wind_speed_10m_max",
-        "timezone": "auto",
-        "forecast_days": 5,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(OPEN_METEO_URL, params=params)
-    except httpx.RequestError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Open-Meteo connection failed: {error}"
-        )
-
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Open-Meteo error: HTTP {response.status_code}"
-        )
-
-    return response.json()
-
-
-async def open_meteo_historical_request(latitude, longitude, days=45):
-
-    end_date = datetime.now(timezone.utc).date().isoformat()
-    start_date = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
-
-    params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "start_date": start_date,
-        "end_date": end_date,
-        "daily": "temperature_2m_max,temperature_2m_min,apparent_temperature_max,wind_speed_10m_max,precipitation_probability_max",
-        "timezone": "auto",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(OPEN_METEO_ARCHIVE_URL, params=params)
-    except httpx.RequestError:
-        return {}
-
-    if response.status_code != 200:
-        return {}
-
-    return response.json()
-
-
 def blend_with_historical_baseline(
     live_value,
     historical_value,
@@ -1375,130 +1312,47 @@ async def get_current_weather(
 
             return result
 
-    provider = "Open-Meteo"
+    raw = await tomorrow_request(
+        TOMORROW_URL,
+        latitude,
+        longitude
+    )
 
-    try:
-        raw = await open_meteo_request(latitude, longitude)
+    data = raw.get("data", {})
+    values = data.get("values", {})
 
-        current = raw.get("current", {})
+    temperature = get_weather_value(values, "temperature")
+    humidity = get_weather_value(values, "humidity")
+    apparent_temperature = get_weather_value(values, "temperatureApparent", temperature)
+    wind_speed = get_weather_value(values, "windSpeed") * 3.6
+    pressure = get_weather_value(values, "pressureSurfaceLevel", 0)
+    clouds = get_weather_value(values, "cloudCover", 0)
+    weather_code = values.get("weatherCode")
+    weather_description = (
+        f"Weather code {weather_code}"
+        if weather_code is not None
+        else "Current weather"
+    )
+    weather_time = data.get("time")
 
-        temperature = get_weather_value(current, "temperature_2m")
-        humidity = get_weather_value(current, "relative_humidity_2m")
-        apparent_temperature = get_weather_value(current, "apparent_temperature", temperature)
-        wind_speed = get_weather_value(current, "wind_speed_10m") * 3.6
-        pressure = get_weather_value(current, "pressure_msl", 0)
-        clouds = get_weather_value(current, "cloud_cover", 0)
-        weather_code = current.get("weather_code")
-        weather_description = get_weather_code_label(weather_code)
-        weather_time = current.get("time")
+    result = build_weather_result(
+        location,
+        latitude,
+        longitude,
+        temperature,
+        humidity,
+        wind_speed,
+        apparent_temperature,
+        weather_time,
+        weather_description,
+        None,
+        pressure,
+        clouds
+    )
 
-        result = build_weather_result(
-            location,
-            latitude,
-            longitude,
-            temperature,
-            humidity,
-            wind_speed,
-            apparent_temperature,
-            weather_time,
-            weather_description,
-            None,
-            pressure,
-            clouds
-        )
-
-        result["weather_code"] = weather_code
-        result["location_name"] = location
-        result["data_source"] = "Open-Meteo"
-
-    except Exception:
-        if not TOMORROW_API_KEY:
-            raise
-
-        provider = "Tomorrow.io"
-        raw = await tomorrow_request(
-            TOMORROW_URL,
-            latitude,
-            longitude
-        )
-
-        data = raw.get(
-            "data",
-            {}
-        )
-
-        values = data.get(
-            "values",
-            {}
-        )
-
-        temperature = get_weather_value(
-            values,
-            "temperature"
-        )
-
-        humidity = get_weather_value(
-            values,
-            "humidity"
-        )
-
-        apparent_temperature = get_weather_value(
-            values,
-            "temperatureApparent",
-            temperature
-        )
-
-        wind_speed = get_weather_value(
-            values,
-            "windSpeed"
-        )
-
-        wind_speed = wind_speed * 3.6
-
-        pressure = get_weather_value(
-            values,
-            "pressureSurfaceLevel",
-            0
-        )
-
-        clouds = get_weather_value(
-            values,
-            "cloudCover",
-            0
-        )
-
-        weather_code = values.get(
-            "weatherCode"
-        )
-
-        weather_description = (
-            f"Weather code {weather_code}"
-            if weather_code is not None
-            else "Current weather"
-        )
-
-        weather_time = data.get(
-            "time"
-        )
-
-        result = build_weather_result(
-            location,
-            latitude,
-            longitude,
-            temperature,
-            humidity,
-            wind_speed,
-            apparent_temperature,
-            weather_time,
-            weather_description,
-            None,
-            pressure,
-            clouds
-        )
-
-        result["weather_code"] = weather_code
-        result["location_name"] = location
-        result["data_source"] = "Tomorrow.io"
+    result["weather_code"] = weather_code
+    result["location_name"] = location
+    result["data_source"] = "Tomorrow.io"
 
     weather_cache[location] = {
         "time": time.time(),
@@ -1639,6 +1493,62 @@ async def weather(
     return data
 
 
+@app.get("/worker-risk")
+async def worker_risk(
+    location: Optional[str] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    app_type: str = "delivery"
+):
+    if location:
+        location_name, coords = get_location(location)
+        lat, lon = coords
+    elif latitude is not None and longitude is not None:
+        location_name = "Custom location"
+        lat, lon = latitude, longitude
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either location or latitude and longitude."
+        )
+
+    weather = await get_current_weather(location_name, lat, lon)
+    risk_level = weather.get("risk_level") or weather.get("health_level") or "LOW"
+    risk_score = float(weather.get("risk_score") or weather.get("health_risk") or 0)
+    app_name = app_type.lower()
+
+    if risk_level == "EXTREME":
+        instruction = "Do not take long outdoor trips. Stop work in direct sun, hydrate, and seek shaded rest immediately."
+    elif risk_level == "HIGH":
+        instruction = "Keep water available, take breaks every 20-30 minutes, and avoid peak heat hours."
+    elif risk_level == "MODERATE":
+        instruction = "Drink water regularly and avoid prolonged outdoor exposure during the hottest part of the day."
+    else:
+        instruction = "Normal conditions for outdoor work. Keep hydration and heat awareness in place."
+
+    if app_name in {"food", "delivery", "driver", "passenger", "rideshare"}:
+        worker_label = "delivery / passenger trip"
+    else:
+        worker_label = f"{app_type} work"
+
+    return {
+        "location": location_name,
+        "latitude": lat,
+        "longitude": lon,
+        "app_type": app_name,
+        "worker_context": worker_label,
+        "risk_score": round(risk_score, 2),
+        "risk_level": risk_level,
+        "temperature_c": round(float(weather.get("temperature") or 0), 2),
+        "heat_index_c": round(float(weather.get("heat_index") or 0), 2),
+        "thermal_stress": round(float(weather.get("thermal_stress") or 0), 2),
+        "advisory": weather.get("advisory"),
+        "recommendation": instruction,
+        "data_source": weather.get("data_source"),
+        "updated_at": weather.get("updated_at")
+    }
+
+
 # ============================================================
 # FORECAST
 # ============================================================
@@ -1653,297 +1563,94 @@ async def forecast(
     )
 
     latitude, longitude = coords
-    historical = await open_meteo_historical_request(latitude, longitude, days=45)
 
-    historical_by_day = {}
-    if historical and historical.get("daily"):
-        for index, date in enumerate(historical["daily"].get("time", [])[:30]):
-            historical_by_day[date] = {
-                "max": historical["daily"].get("temperature_2m_max", [None] * 30)[index],
-                "min": historical["daily"].get("temperature_2m_min", [None] * 30)[index],
-                "apparent": historical["daily"].get("apparent_temperature_max", [None] * 30)[index],
-                "wind": historical["daily"].get("wind_speed_10m_max", [None] * 30)[index],
-            }
-
-    try:
-        raw = await open_meteo_request(latitude, longitude)
-        daily = raw.get("daily", {})
-        dates = daily.get("time", [])[:5]
-
-        if not dates:
-            raise HTTPException(
-                status_code=502,
-                detail="No forecast data received from Open-Meteo."
-            )
-
-        result = []
-        for index, date in enumerate(dates):
-            temperature_max = get_weather_value(daily, "temperature_2m_max")
-            temperature_min = get_weather_value(daily, "temperature_2m_min")
-            apparent_temperature_max = get_weather_value(daily, "apparent_temperature_max")
-            wind_speed_max = get_weather_value(daily, "wind_speed_10m_max")
-            uv_index_max = get_weather_value(daily, "uv_index_max")
-            precipitation_probability = get_weather_value(daily, "precipitation_probability_max")
-
-            if isinstance(temperature_max, list):
-                temperature_max = temperature_max[index]
-            if isinstance(temperature_min, list):
-                temperature_min = temperature_min[index]
-            if isinstance(apparent_temperature_max, list):
-                apparent_temperature_max = apparent_temperature_max[index]
-            if isinstance(wind_speed_max, list):
-                wind_speed_max = wind_speed_max[index]
-            if isinstance(uv_index_max, list):
-                uv_index_max = uv_index_max[index]
-            if isinstance(precipitation_probability, list):
-                precipitation_probability = precipitation_probability[index]
-
-            historical_day = historical_by_day.get(date, {})
-            historical_max = historical_day.get("max")
-            historical_min = historical_day.get("min")
-            historical_apparent = historical_day.get("apparent")
-
-            temperature_max = blend_with_historical_baseline(temperature_max, historical_max, 0.7, 0.3)
-            temperature_min = blend_with_historical_baseline(temperature_min, historical_min, 0.7, 0.3)
-            apparent_temperature_max = blend_with_historical_baseline(apparent_temperature_max, historical_apparent, 0.7, 0.3)
-
-            humidity = 40 + (index * 6) + (temperature_max * 0.8)
-            humidity = clamp(humidity, 20, 95)
-            heat_index = calculate_heat_index(temperature_max, humidity)
-            wbgt = calculate_wbgt(temperature_max, humidity, wind_speed_max * 3.6)
-            thermal_stress = calculate_thermal_stress(temperature_max, humidity, heat_index, wbgt, wind_speed_max * 3.6)
-            health_risk = calculate_forecast_health_risk(
-                temperature_max,
-                humidity,
-                wind_speed_max * 3.6,
-                apparent_temperature_max,
-                uv_index_max,
-                precipitation_probability
-            )
-            risk_level = get_risk_level(health_risk)
-
-            result.append({
-                "date": date,
-                "temperature": round(temperature_max, 2),
-                "temperature_min": round(temperature_min, 2),
-                "temperature_max": round(temperature_max, 2),
-                "humidity": round(humidity, 2),
-                "wind_speed": round(wind_speed_max * 3.6, 2),
-                "apparent_temperature": round(apparent_temperature_max, 2),
-                "heat_index": round(heat_index, 2),
-                "wbgt": round(wbgt, 2),
-                "thermal_stress": round(thermal_stress, 2),
-                "health_risk": round(health_risk, 2),
-                "health_level": risk_level,
-                "risk_score": round(health_risk, 2),
-                "risk_level": risk_level,
-                "advisory": get_advisory(risk_level),
-                "data_source": "Open-Meteo + historical baseline",
-                "uv_index": round(uv_index_max, 2),
-                "precipitation_probability": round(precipitation_probability, 2)
-            })
-
-        return {
-            "location": location_name,
-            "latitude": latitude,
-            "longitude": longitude,
-            "forecast_days": len(result),
-            "data": result
-        }
-
-    except Exception:
-        if not TOMORROW_API_KEY:
-            raise
-
-    if TOMORROW_API_KEY:
-        raw = await tomorrow_request(
-            TOMORROW_FORECAST_URL,
-            latitude,
-            longitude
-        )
-
-        timelines = raw.get(
-            "timelines",
-            {}
-        )
-
-        hourly = timelines.get(
-            "hourly",
-            []
-        )
-
-        if not hourly:
-            raise HTTPException(
-                status_code=502,
-                detail="No forecast data received."
-            )
-
-        daily = {}
-
-        for item in hourly:
-            time_string = item.get("time")
-            if not time_string:
-                continue
-
-            try:
-                dt = datetime.fromisoformat(
-                    time_string.replace("Z", "+00:00")
-                )
-            except Exception:
-                continue
-
-            local_date = dt.date().isoformat()
-            daily.setdefault(local_date, []).append(item)
-
-        today = datetime.now(timezone.utc).date()
-        dates = [
-            date for date in sorted(daily.keys())
-            if datetime.fromisoformat(date).date() >= today
-        ][:5]
-
-        result = []
-
-        for date in dates:
-            day_items = daily[date]
-            temperatures = []
-            selected = None
-            selected_hour_difference = 999
-
-            for item in day_items:
-                values = item.get("values", {})
-                temperature = get_weather_value(values, "temperature")
-                temperatures.append(temperature)
-
-                try:
-                    dt = datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
-                    hour_difference = abs(dt.hour - 12)
-                    if selected is None or hour_difference < selected_hour_difference:
-                        selected = item
-                        selected_hour_difference = hour_difference
-                except Exception:
-                    if selected is None:
-                        selected = item
-
-            if not selected:
-                continue
-
-            values = selected.get("values", {})
-            temperature = get_weather_value(values, "temperature")
-            humidity = get_weather_value(values, "humidity")
-            apparent_temperature = get_weather_value(values, "temperatureApparent", temperature)
-            wind_speed = get_weather_value(values, "windSpeed") * 3.6
-            uv_index = get_weather_value(values, "uvIndex", 0)
-            precipitation_probability = get_weather_value(values, "precipitationProbability", 0)
-
-            historical_day = historical_by_day.get(date, {})
-            historical_max = historical_day.get("max")
-            historical_min = historical_day.get("min")
-            historical_apparent = historical_day.get("apparent")
-            historical_wind = historical_day.get("wind")
-
-            temperature_max = blend_with_historical_baseline(max(temperatures), historical_max, 0.72, 0.28)
-            temperature_min = blend_with_historical_baseline(min(temperatures), historical_min, 0.68, 0.32)
-            apparent_temperature_max = blend_with_historical_baseline(apparent_temperature, historical_apparent, 0.7, 0.3)
-            wind_speed_max = blend_with_historical_baseline(wind_speed, historical_wind, 0.7, 0.3)
-
-            humidity = clamp((humidity * 0.65) + (40 + ((temperature_max - 20) * 2.8) * 0.35), 20, 95)
-            heat_index = calculate_heat_index(temperature_max, humidity)
-            wbgt = calculate_wbgt(temperature_max, humidity, wind_speed_max)
-            thermal_stress = calculate_thermal_stress(temperature_max, humidity, heat_index, wbgt, wind_speed_max)
-            health_risk = calculate_forecast_health_risk(
-                temperature_max,
-                humidity,
-                wind_speed_max,
-                apparent_temperature_max,
-                uv_index,
-                precipitation_probability
-            )
-            risk_level = get_risk_level(health_risk)
-
-            result.append({
-                "date": date,
-                "temperature": round(temperature_max, 2),
-                "temperature_min": round(temperature_min, 2),
-                "temperature_max": round(temperature_max, 2),
-                "humidity": round(humidity, 2),
-                "wind_speed": round(wind_speed_max, 2),
-                "apparent_temperature": round(apparent_temperature_max, 2),
-                "heat_index": round(heat_index, 2),
-                "wbgt": round(wbgt, 2),
-                "thermal_stress": round(thermal_stress, 2),
-                "health_risk": round(health_risk, 2),
-                "health_level": risk_level,
-                "risk_score": round(health_risk, 2),
-                "risk_level": risk_level,
-                "advisory": get_advisory(risk_level),
-                "data_source": "Tomorrow.io + historical baseline",
-                "uv_index": round(uv_index, 2),
-                "precipitation_probability": round(precipitation_probability, 2)
-            })
-
-        payload = {
-            "location": location_name,
-            "latitude": latitude,
-            "longitude": longitude,
-            "forecast_days": len(result),
-            "data": result
-        }
-
-        return payload
-
-    raise HTTPException(
-        status_code=502,
-        detail="No forecast data received from any configured weather provider."
+    raw = await tomorrow_request(
+        TOMORROW_FORECAST_URL,
+        latitude,
+        longitude
     )
 
-    if not dates:
+    timelines = raw.get("timelines", {})
+    hourly = timelines.get("hourly", [])
+
+    if not hourly:
         raise HTTPException(
             status_code=502,
-            detail="No forecast data received from Open-Meteo."
+            detail="No forecast data received from Tomorrow.io."
         )
 
+    daily = {}
+
+    for item in hourly:
+        time_string = item.get("time")
+        if not time_string:
+            continue
+
+        try:
+            dt = datetime.fromisoformat(time_string.replace("Z", "+00:00"))
+        except Exception:
+            continue
+
+        local_date = dt.date().isoformat()
+        daily.setdefault(local_date, []).append(item)
+
+    today = datetime.now(timezone.utc).date()
+    dates = [
+        date for date in sorted(daily.keys())
+        if datetime.fromisoformat(date).date() >= today
+    ][:5]
+
     result = []
-    for index, date in enumerate(dates):
-        temperature_max = get_weather_value(daily, "temperature_2m_max")
-        temperature_min = get_weather_value(daily, "temperature_2m_min")
-        apparent_temperature_max = get_weather_value(daily, "apparent_temperature_max")
-        wind_speed_max = get_weather_value(daily, "wind_speed_10m_max")
-        uv_index_max = get_weather_value(daily, "uv_index_max")
-        precipitation_probability = get_weather_value(daily, "precipitation_probability_max")
 
-        if isinstance(temperature_max, list):
-            temperature_max = temperature_max[index]
-        if isinstance(temperature_min, list):
-            temperature_min = temperature_min[index]
-        if isinstance(apparent_temperature_max, list):
-            apparent_temperature_max = apparent_temperature_max[index]
-        if isinstance(wind_speed_max, list):
-            wind_speed_max = wind_speed_max[index]
-        if isinstance(uv_index_max, list):
-            uv_index_max = uv_index_max[index]
-        if isinstance(precipitation_probability, list):
-            precipitation_probability = precipitation_probability[index]
+    for date in dates:
+        day_items = daily[date]
+        temperatures = []
+        selected = None
+        selected_hour_difference = 999
 
-        historical_day = historical_by_day.get(date, {})
-        historical_max = historical_day.get("max")
-        historical_min = historical_day.get("min")
-        historical_apparent = historical_day.get("apparent")
+        for item in day_items:
+            values = item.get("values", {})
+            temperature = get_weather_value(values, "temperature")
+            temperatures.append(temperature)
 
-        temperature_max = blend_with_historical_baseline(temperature_max, historical_max, 0.7, 0.3)
-        temperature_min = blend_with_historical_baseline(temperature_min, historical_min, 0.7, 0.3)
-        apparent_temperature_max = blend_with_historical_baseline(apparent_temperature_max, historical_apparent, 0.7, 0.3)
+            try:
+                dt = datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
+                hour_difference = abs(dt.hour - 12)
+                if selected is None or hour_difference < selected_hour_difference:
+                    selected = item
+                    selected_hour_difference = hour_difference
+            except Exception:
+                if selected is None:
+                    selected = item
 
-        humidity = 40 + (index * 6) + (temperature_max * 0.8)
-        humidity = clamp(humidity, 20, 95)
+        if not selected:
+            continue
+
+        values = selected.get("values", {})
+        temperature = get_weather_value(values, "temperature")
+        humidity = get_weather_value(values, "humidity")
+        apparent_temperature = get_weather_value(values, "temperatureApparent", temperature)
+        wind_speed = get_weather_value(values, "windSpeed") * 3.6
+        uv_index = get_weather_value(values, "uvIndex", 0)
+        precipitation_probability = get_weather_value(values, "precipitationProbability", 0)
+
+        temperature_max = max(temperatures) if temperatures else temperature
+        temperature_min = min(temperatures) if temperatures else temperature
+        temperature_max = float(temperature_max)
+        temperature_min = float(temperature_min)
+        apparent_temperature_max = float(apparent_temperature)
+        wind_speed_max = float(wind_speed)
+
+        humidity = clamp((humidity * 0.65) + (40 + ((temperature_max - 20) * 2.8) * 0.35), 20, 95)
         heat_index = calculate_heat_index(temperature_max, humidity)
-        wbgt = calculate_wbgt(temperature_max, humidity, wind_speed_max * 3.6)
-        thermal_stress = calculate_thermal_stress(temperature_max, humidity, heat_index, wbgt, wind_speed_max * 3.6)
+        wbgt = calculate_wbgt(temperature_max, humidity, wind_speed_max)
+        thermal_stress = calculate_thermal_stress(temperature_max, humidity, heat_index, wbgt, wind_speed_max)
         health_risk = calculate_forecast_health_risk(
             temperature_max,
             humidity,
-            wind_speed_max * 3.6,
+            wind_speed_max,
             apparent_temperature_max,
-            uv_index_max,
+            uv_index,
             precipitation_probability
         )
         risk_level = get_risk_level(health_risk)
@@ -1954,7 +1661,7 @@ async def forecast(
             "temperature_min": round(temperature_min, 2),
             "temperature_max": round(temperature_max, 2),
             "humidity": round(humidity, 2),
-            "wind_speed": round(wind_speed_max * 3.6, 2),
+            "wind_speed": round(wind_speed_max, 2),
             "apparent_temperature": round(apparent_temperature_max, 2),
             "heat_index": round(heat_index, 2),
             "wbgt": round(wbgt, 2),
@@ -1964,10 +1671,20 @@ async def forecast(
             "risk_score": round(health_risk, 2),
             "risk_level": risk_level,
             "advisory": get_advisory(risk_level),
-            "data_source": "Open-Meteo + historical baseline",
-            "uv_index": round(uv_index_max, 2),
+            "data_source": "Tomorrow.io",
+            "uv_index": round(uv_index, 2),
             "precipitation_probability": round(precipitation_probability, 2)
         })
+
+    payload = {
+        "location": location_name,
+        "latitude": latitude,
+        "longitude": longitude,
+        "forecast_days": len(result),
+        "data": result
+    }
+
+    return payload
 
     return {
         "location": location_name,
@@ -2466,7 +2183,7 @@ async def startup():
         "Configured"
         if TOMORROW_API_KEY
         else
-        "NOT CONFIGURED (Open-Meteo fallback active)"
+        "NOT CONFIGURED"
     )
 
     print("=" * 60)

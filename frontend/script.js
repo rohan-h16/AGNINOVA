@@ -7,16 +7,19 @@
 
 /* BACKEND */
 
+const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
+
 const BACKEND_URL = (
     window.__AGNINOVA_BACKEND_URL__ ||
-    "https://agninova.onrender.com"
+    DEFAULT_BACKEND_URL
 ).replace(/\/$/, "");
 
-const BACKEND_FALLBACK_URLS = [
-    BACKEND_URL,
-    "http://127.0.0.1:8000",
-    "https://agninova.onrender.com"
-].filter((value, index, array) => value && array.indexOf(value) === index);
+const BACKEND_CANDIDATES = Array.from(
+    new Set([
+        DEFAULT_BACKEND_URL,
+        BACKEND_URL
+    ].filter(Boolean))
+).filter((url) => !/agninova\.onrender\.com/i.test(url));
 
 
 /* GLOBAL */
@@ -30,7 +33,7 @@ let autoRefreshTimer = null;
 let districtBoundaryGeoJson = null;
 
 let selectedDistrict = "Bengaluru Urban";
-const AUTO_REFRESH_MS = 60000;
+const AUTO_REFRESH_MS = 300000;
 
 
 /* ============================================================
@@ -214,15 +217,30 @@ async function checkBackend() {
 
     try {
 
-        const response =
-            await fetch(`${BACKEND_URL}/test`);
+        let activeBackend = null;
 
-        if (!response.ok) {
-            throw new Error("Backend error");
+        for (const baseUrl of BACKEND_CANDIDATES) {
+            try {
+                const response = await fetch(`${baseUrl}/test`);
+                if (response.ok) {
+                    activeBackend = baseUrl;
+                    break;
+                }
+            }
+            catch (error) {
+                // try the next candidate
+            }
         }
 
+        if (!activeBackend) {
+            throw new Error("No backend candidates responded");
+        }
+
+        const response = await fetch(`${activeBackend}/test`);
         const data = await response.json();
         const source = data.weather_provider || "Live weather";
+
+        window.__AGNINOVA_BACKEND_URL__ = activeBackend;
 
         dot.classList.add("online");
         if (apiSignal) apiSignal.classList.add("online");
@@ -234,7 +252,7 @@ async function checkBackend() {
             apiLabel.textContent = `API: ${source}`;
         }
 
-        updateRefreshStatus("Auto-refresh: every 60 seconds");
+        updateRefreshStatus("Auto-refresh: every 5 minutes");
 
     }
 
@@ -247,10 +265,10 @@ async function checkBackend() {
             "Backend Offline";
 
         if (apiLabel) {
-            apiLabel.textContent = "API: fallback demo";
+            apiLabel.textContent = "API: Tomorrow.io";
         }
 
-        updateRefreshStatus("Auto-refresh: every 60 seconds (fallback mode)");
+        updateRefreshStatus("Auto-refresh: every 5 minutes (fallback mode)");
 
         console.warn(
             "FastAPI backend unavailable:",
@@ -300,7 +318,7 @@ function updateRefreshStatus(text) {
         return;
     }
 
-    refreshEl.textContent = text || "Auto-refresh: every 60 seconds";
+    refreshEl.textContent = text || "Auto-refresh: every 5 minutes";
 
 }
 
@@ -313,34 +331,31 @@ async function loadWeather() {
 
     setLoadingState();
 
-
     try {
 
         const encoded =
             encodeURIComponent(selectedDistrict);
 
+        let activeBackend = null;
 
-        const response =
-            await fetch(
-                `${BACKEND_URL}/weather/${encoded}`
-            );
-
-
-        if (!response.ok) {
-            throw new Error(
-                `HTTP ${response.status}`
-            );
+        for (const baseUrl of BACKEND_CANDIDATES) {
+            try {
+                const response = await fetch(`${baseUrl}/weather/${encoded}`);
+                if (response.ok) {
+                    activeBackend = baseUrl;
+                    const data = await response.json();
+                    currentWeather = data;
+                    window.__AGNINOVA_BACKEND_URL__ = activeBackend;
+                    renderWeather(data);
+                    return;
+                }
+            }
+            catch (error) {
+                // try the next candidate
+            }
         }
 
-
-        const data =
-            await response.json();
-
-
-        currentWeather = data;
-
-
-        renderWeather(data);
+        throw new Error("No backend responded for district weather");
 
     }
 
@@ -458,7 +473,7 @@ function getAdvisoryText(level) {
 
 function renderWeather(data) {
 
-    const source = String(data.data_source || "Open-Meteo").toUpperCase();
+    const source = String(data.data_source || "Tomorrow.io").toUpperCase();
     const apiLabel = document.getElementById("apiSourceLabel");
 
     if (apiLabel) {
@@ -712,45 +727,40 @@ async function loadGIS() {
         initializeMap();
     }
 
-
     const districtList =
         document.getElementById(
             "districtList"
         );
-
 
     districtList.innerHTML =
         `<div class="empty-state">
             Loading live Karnataka heat risk...
         </div>`;
 
-
     try {
 
-        const response =
-            await fetch(
-                `${BACKEND_URL}/gis-risk`
-            );
+        let activeBackend = null;
 
-
-        if (!response.ok) {
-            throw new Error(
-                `HTTP ${response.status}`
-            );
+        for (const baseUrl of BACKEND_CANDIDATES) {
+            try {
+                const response = await fetch(`${baseUrl}/gis-risk`);
+                if (response.ok) {
+                    activeBackend = baseUrl;
+                    const data = await response.json();
+                    window.__AGNINOVA_BACKEND_URL__ = activeBackend;
+                    const records = Array.isArray(data)
+                        ? data
+                        : data.districts || data.data || [];
+                    renderGIS(records);
+                    return;
+                }
+            }
+            catch (error) {
+                // try the next candidate
+            }
         }
 
-
-        const data =
-            await response.json();
-
-
-        const records =
-            Array.isArray(data)
-                ? data
-                : data.districts || data.data || [];
-
-
-        renderGIS(records);
+        throw new Error("No backend responded for GIS data");
 
     }
 
@@ -1190,7 +1200,7 @@ function getRiskColor(level) {
    FORECAST
    ============================================================ */
 
-async async function loadForecast() {
+async function loadForecast() {
 
     const container =
         document.getElementById(
@@ -1709,7 +1719,6 @@ function generateLocalAIResponse(question) {
 
     return `I am monitoring ${selectedDistrict}. Ask me about current risk, thermal stress, prediction timing, or safety steps for hot working hours.`;
 
-}
 }
 
 

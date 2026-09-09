@@ -32,9 +32,9 @@ class HistoricalForecastTests(unittest.TestCase):
         self.assertLess(midday["temperature_high"], 42)
         self.assertLess(midday["risk_score"], 90)
 
-    def test_backend_reports_free_provider_when_key_missing(self):
+    def test_backend_reports_tomorrow_provider(self):
         payload = asyncio.run(backend_test())
-        self.assertIn("Open-Meteo", payload.get("weather_provider", ""))
+        self.assertIn("Tomorrow.io", payload.get("weather_provider", ""))
 
 
 if __name__ == "__main__":
