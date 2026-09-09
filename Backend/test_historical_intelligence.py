@@ -1,9 +1,11 @@
+import asyncio
 import unittest
 
 from main import (
     build_historical_workday_profile,
     get_india_working_hours_profile,
     generate_ai_answer,
+    test as backend_test,
 )
 
 
@@ -29,6 +31,10 @@ class HistoricalForecastTests(unittest.TestCase):
         midday = next(item for item in profile if item["time"] == "12:00")
         self.assertLess(midday["temperature_high"], 42)
         self.assertLess(midday["risk_score"], 90)
+
+    def test_backend_reports_free_provider_when_key_missing(self):
+        payload = asyncio.run(backend_test())
+        self.assertIn("Open-Meteo", payload.get("weather_provider", ""))
 
 
 if __name__ == "__main__":

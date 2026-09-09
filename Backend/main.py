@@ -25,6 +25,10 @@ app = FastAPI(
 )
 
 
+def get_active_weather_provider():
+    return "Tomorrow.io" if TOMORROW_API_KEY else "Open-Meteo"
+
+
 # ============================================================
 # CORS
 # ============================================================
@@ -1504,13 +1508,15 @@ async def get_current_weather(
 @app.get("/")
 async def root():
 
+    provider = get_active_weather_provider()
+
     return {
 
         "project": "AGNINOVA",
 
         "status": "running",
 
-        "weather_provider": "Tomorrow.io",
+        "weather_provider": provider,
 
         "current_weather_refresh": "60 seconds",
 
@@ -1529,13 +1535,15 @@ async def root():
 @app.get("/test")
 async def test():
 
+    provider = get_active_weather_provider()
+
     return {
 
         "status": "Backend working",
 
         "project": "AGNINOVA",
 
-        "weather_provider": "Tomorrow.io",
+        "weather_provider": provider,
 
         "district_count": len(
             LOCATIONS
@@ -1553,7 +1561,7 @@ async def test():
             "15 minutes",
 
         "forecast":
-            "Tomorrow.io forecast"
+            f"{provider} forecast"
     }
 
 
@@ -2320,6 +2328,8 @@ async def emergency_alert(
 @app.on_event("startup")
 async def startup():
 
+    provider = get_active_weather_provider()
+
     print("")
 
     print("=" * 60)
@@ -2331,7 +2341,8 @@ async def startup():
     print("=" * 60)
 
     print(
-        "Weather Provider : Tomorrow.io"
+        "Weather Provider :",
+        provider
     )
 
     print(
@@ -2343,7 +2354,8 @@ async def startup():
     )
 
     print(
-        "Forecast         : Tomorrow.io"
+        "Forecast         :",
+        provider
     )
 
     print(
@@ -2356,7 +2368,7 @@ async def startup():
         "Configured"
         if TOMORROW_API_KEY
         else
-        "NOT CONFIGURED"
+        "NOT CONFIGURED (Open-Meteo fallback active)"
     )
 
     print("=" * 60)
