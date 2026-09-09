@@ -87,6 +87,8 @@ gis_cache = {}
 # KARNATAKA DISTRICTS
 # ============================================================
 
+# District centroids for Karnataka, aligned to district headquarters / known town coordinates.
+# These are deterministic, real-world reference coordinates and are not generated from random formulas.
 LOCATIONS = {
     "Bagalkot": (16.18, 75.69),
     "Ballari": (15.14, 76.92),
@@ -177,6 +179,9 @@ def normalize(
     maximum
 ):
 
+    if maximum <= minimum:
+        return 0
+
     if value <= minimum:
         return 0
 
@@ -243,43 +248,44 @@ def calculate_thermal_stress(
 
     temperature_score = normalize(
         temperature,
-        30,
-        45
+        25,
+        42
     )
 
     humidity_score = normalize(
         humidity,
-        50,
-        90
+        35,
+        80
     )
 
     heat_index_score = normalize(
         heat_index,
-        30,
-        50
+        25,
+        45
     )
 
     wbgt_score = normalize(
         wbgt,
-        25,
-        35
+        22,
+        34
     )
 
-    wind_score = (
+    wind_score = max(
+        0,
         100
         -
         normalize(
             wind_speed,
             0,
-            10
+            15
         )
     )
 
     score = (
-        0.25 * temperature_score
+        0.30 * temperature_score
         + 0.20 * humidity_score
         + 0.25 * heat_index_score
-        + 0.20 * wbgt_score
+        + 0.15 * wbgt_score
         + 0.10 * wind_score
     )
 
@@ -302,25 +308,25 @@ def calculate_health_risk(
 
     temperature_score = normalize(
         temperature,
-        35,
-        45
+        25,
+        40
     )
 
     humidity_score = normalize(
         humidity,
-        50,
-        90
+        30,
+        80
     )
 
     apparent_score = normalize(
         apparent_temperature,
-        35,
-        50
+        25,
+        45
     )
 
     score = (
-        0.35 * temperature_score
-        + 0.25 * humidity_score
+        0.40 * temperature_score
+        + 0.20 * humidity_score
         + 0.25 * thermal_stress
         + 0.15 * apparent_score
     )

@@ -25,7 +25,9 @@ let currentWeather = null;
 let map = null;
 let forecastChart = null;
 let districtMarkers = [];
+let districtPolygons = [];
 let autoRefreshTimer = null;
+let districtBoundaryGeoJson = null;
 
 let selectedDistrict = "Bengaluru Urban";
 const AUTO_REFRESH_MS = 60000;
@@ -358,20 +360,48 @@ async function loadWeather() {
 }
 
 
+function normalizeDemo(value, minimum, maximum) {
+    if (maximum <= minimum) return 0;
+    if (value <= minimum) return 0;
+    if (value >= maximum) return 100;
+    return ((value - minimum) / (maximum - minimum)) * 100;
+}
+
+function clampDemo(value, minimum = 0, maximum = 100) {
+    return Math.min(maximum, Math.max(minimum, value));
+}
+
 function generateDemoWeather(location) {
 
     const seed = location
         .split("")
         .reduce((total, char) => total + char.charCodeAt(0), 0);
 
-    const temperature = 31 + (seed % 12);
-    const humidity = 48 + (seed % 33);
-    const windSpeed = 6 + (seed % 18);
-    const apparentTemperature = temperature + 3 + (seed % 5);
-    const heatIndex = temperature + 4 + (humidity / 100 * 9);
+    const temperature = 28 + (seed % 12);
+    const humidity = 40 + (seed % 35);
+    const windSpeed = 3 + (seed % 18);
+    const apparentTemperature = temperature + 2 + (seed % 5);
+    const heatIndex = temperature + 3 + (humidity / 100 * 8);
     const wbgt = (0.7 * temperature) + (0.2 * humidity * 0.01 * temperature) - (0.1 * windSpeed);
-    const thermalStress = Math.min(100, Math.max(0, 35 + (temperature * 1.4) + (humidity * 0.35) - (windSpeed * 0.7)));
-    const healthRisk = Math.min(100, Math.max(0, 18 + (temperature * 1.7) + (humidity * 0.45) + (heatIndex * 0.25) - (windSpeed * 0.5)));
+
+    const temperatureScore = normalizeDemo(temperature, 25, 42);
+    const humidityScore = normalizeDemo(humidity, 35, 80);
+    const heatIndexScore = normalizeDemo(heatIndex, 25, 45);
+    const wbgtScore = normalizeDemo(wbgt, 22, 34);
+    const windScore = Math.max(0, 100 - normalizeDemo(windSpeed, 0, 15));
+
+    const thermalStress = clampDemo(
+        0.30 * temperatureScore + 0.20 * humidityScore + 0.25 * heatIndexScore + 0.15 * wbgtScore + 0.10 * windScore,
+        0,
+        100
+    );
+
+    const apparentScore = normalizeDemo(apparentTemperature, 25, 45);
+    const healthRisk = clampDemo(
+        0.40 * normalizeDemo(temperature, 25, 40) + 0.20 * humidityScore + 0.25 * thermalStress + 0.15 * apparentScore,
+        0,
+        100
+    );
 
     const riskLevel = getRiskLevel(healthRisk);
 
@@ -660,10 +690,12 @@ function initializeMap() {
 
 
     L.tileLayer(
-        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
         {
             attribution:
-                "&copy; OpenStreetMap contributors"
+                "&copy; OpenStreetMap contributors &copy; CARTO",
+            subdomains: "abcd",
+            maxZoom: 19
         }
     ).addTo(map);
 
@@ -832,28 +864,102 @@ function renderHotspotList(records) {
 }
 
 
+const DISTRICT_NAME_ALIASES = {
+    "Bengaluru Urban": "Bangalore Urban",
+    "Bengaluru Rural": "Bangalore Rural",
+    "Belagavi": "Belgaum",
+    "Ballari": "Bellary",
+    "Vijayapura": "Bijapur",
+    "Chamarajanagar": "Chamrajnagar",
+    "Chikkamagaluru": "Chikmagalur",
+    "Shivamogga": "Shimoga",
+    "Mysuru": "Mysore",
+    "Tumakuru": "Tumkur"
+};
+
+function normalizeDistrictName(name) {
+    const clean = String(name || "").trim();
+    return DISTRICT_NAME_ALIASES[clean] || clean;
+}
+
+async function loadDistrictBoundaries() {
+    if (districtBoundaryGeoJson) {
+        return districtBoundaryGeoJson;
+    }
+
+    const response = await fetch(
+        "https://raw.githubusercontent.com/geohacker/india/master/district/india_district.geojson"
+    );
+
+    if (!response.ok) {
+        throw new Error(`District boundary fetch failed: ${response.status}`);
+    }
+
+    districtBoundaryGeoJson = await response.json();
+    return districtBoundaryGeoJson;
+}
+
+function getBoundaryFeatureForDistrict(districtName) {
+    if (!districtBoundaryGeoJson) {
+        return null;
+    }
+
+    const targetName = normalizeDistrictName(districtName).toLowerCase();
+
+    const feature = (districtBoundaryGeoJson.features || []).find(item => {
+        const props = item.properties || {};
+        const propName = String(props.NAME_2 || props.NAME_1 || "").trim();
+        return propName && propName.toLowerCase() === targetName;
+    });
+
+    return feature || null;
+}
+
 function generateDemoGIS() {
 
-    return districts.map((district, index) => {
-
-        const base = index + 1;
-        const temperature = 29 + (base % 12);
-        const humidity = 45 + (base % 30);
+    return districts.map((district) => {
+        const latitude = 13.0 + (district.length % 6) * 0.25;
+        const longitude = 75.5 + (district.length % 7) * 0.35;
+        const temperature = 29 + (district.length % 12);
+        const humidity = 45 + (district.length % 30);
+        const windSpeed = 4 + (district.length % 14);
+        const apparentTemperature = temperature + 2 + (district.length % 5);
         const heatIndex = temperature + 3 + (humidity / 100 * 8);
-        const wbgt = temperature + (humidity / 100 * 6);
-        const riskScore = Math.min(100, 18 + (temperature * 1.6) + (humidity * 0.45) + (index * 0.9));
+        const wbgt = (0.7 * temperature) + (0.2 * humidity * 0.01 * temperature) - (0.1 * windSpeed);
+
+        const temperatureScore = normalizeDemo(temperature, 25, 42);
+        const humidityScore = normalizeDemo(humidity, 35, 80);
+        const heatIndexScore = normalizeDemo(heatIndex, 25, 45);
+        const wbgtScore = normalizeDemo(wbgt, 22, 34);
+        const windScore = Math.max(0, 100 - normalizeDemo(windSpeed, 0, 15));
+        const thermalStress = clampDemo(
+            0.30 * temperatureScore + 0.20 * humidityScore + 0.25 * heatIndexScore + 0.15 * wbgtScore + 0.10 * windScore,
+            0,
+            100
+        );
+        const apparentScore = normalizeDemo(apparentTemperature, 25, 45);
+        const riskScore = clampDemo(
+            0.40 * normalizeDemo(temperature, 25, 40) + 0.20 * humidityScore + 0.25 * thermalStress + 0.15 * apparentScore,
+            0,
+            100
+        );
+
+        const riskLevel = getRiskLevel(riskScore);
 
         return {
             location: district,
-            latitude: 12.5 + (index % 8) * 0.6,
-            longitude: 74.2 + (index % 10) * 0.8,
+            latitude,
+            longitude,
             temperature,
             humidity,
+            wind_speed: windSpeed,
             heat_index: heatIndex,
             wbgt,
+            thermal_stress: thermalStress,
             risk_score: riskScore,
-            risk_level: getRiskLevel(riskScore),
-            health_level: getRiskLevel(riskScore)
+            risk_level: riskLevel,
+            health_level: riskLevel,
+            health_risk: riskScore
         };
 
     });
@@ -865,19 +971,22 @@ function generateDemoGIS() {
    RENDER GIS
    ============================================================ */
 
-function renderGIS(records) {
+async function renderGIS(records) {
 
-    clearMarkers();
-
+    clearMapLayers();
 
     const districtList =
         document.getElementById(
             "districtList"
         );
 
-
     districtList.innerHTML = "";
 
+    try {
+        await loadDistrictBoundaries();
+    } catch (error) {
+        console.warn("District boundary dataset unavailable; falling back to centroid markers.", error);
+    }
 
     records.forEach(item => {
 
@@ -887,13 +996,11 @@ function renderGIS(records) {
                 item.lat
             );
 
-
         const lon =
             Number(
                 item.longitude ??
                 item.lon
             );
-
 
         const score =
             Number(
@@ -902,14 +1009,12 @@ function renderGIS(records) {
                 0
             );
 
-
         const level =
             String(
                 item.risk_level ??
                 item.health_level ??
                 getRiskLevel(score)
             ).toUpperCase();
-
 
         const temperature =
             Number(
@@ -918,7 +1023,6 @@ function renderGIS(records) {
                 0
             );
 
-
         if (
             Number.isNaN(lat) ||
             Number.isNaN(lon)
@@ -926,84 +1030,55 @@ function renderGIS(records) {
             return;
         }
 
-
         const color =
             getRiskColor(level);
 
+        const districtFeature = getBoundaryFeatureForDistrict(item.location || "Unknown");
 
-        const marker =
-            L.circleMarker(
-                [lat, lon],
-                {
-                    radius: 10,
+        let districtLayer;
 
+        if (districtFeature && districtFeature.geometry) {
+            districtLayer = L.geoJSON(districtFeature, {
+                style: {
                     color: color,
-
                     fillColor: color,
-
-                    fillOpacity: 0.75,
-
-                    weight: 2
+                    fillOpacity: 0.58,
+                    weight: 2.2,
+                    opacity: 1,
+                    smoothFactor: 1.2
                 }
-            );
+            });
+        } else {
+            districtLayer = L.circleMarker([lat, lon], {
+                radius: 10,
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.55,
+                weight: 2
+            });
+        }
 
-
-        marker.bindPopup(`
-
-            <div style="font-family:Arial;min-width:180px">
-
-                <strong style="font-size:15px">
-                    ${item.location || "District"}
-                </strong>
-
+        districtLayer.bindPopup(`
+            <div style="font-family:Arial;min-width:180px; color:#102033;">
+                <strong style="font-size:15px">${item.location || "District"}</strong>
                 <hr>
-
-                <b>Temperature:</b>
-                ${temperature.toFixed(1)} °C
-
-                <br>
-
-                <b>Humidity:</b>
-                ${Number(item.humidity || 0).toFixed(1)} %
-
-                <br>
-
-                <b>Heat Index:</b>
-                ${Number(item.heat_index || 0).toFixed(1)} °C
-
-                <br>
-
-                <b>WBGT:</b>
-                ${Number(item.wbgt || 0).toFixed(1)} °C
-
-                <br><br>
-
-                <strong style="color:${color}">
-                    ${level}
-                </strong>
-
-                <br>
-
-                Risk Score:
-                ${score.toFixed(1)}/100
-
+                <b>Temperature:</b> ${temperature.toFixed(1)} °C<br>
+                <b>Humidity:</b> ${Number(item.humidity || 0).toFixed(1)} %<br>
+                <b>Heat Index:</b> ${Number(item.heat_index || 0).toFixed(1)} °C<br>
+                <b>WBGT:</b> ${Number(item.wbgt || 0).toFixed(1)} °C<br><br>
+                <strong style="color:${color}">${level}</strong><br>
+                Risk Score: ${score.toFixed(1)}/100
             </div>
-
         `);
 
-
-        marker.addTo(map);
-
-        districtMarkers.push(marker);
-
+        districtLayer.addTo(map);
+        districtPolygons.push(districtLayer);
 
         const row =
             document.createElement("div");
 
-
         row.className =
             "district-item";
-
 
         row.innerHTML = `
 
@@ -1032,18 +1107,18 @@ function renderGIS(records) {
 
         `;
 
-
         row.onclick = () => {
+            if (districtLayer.getBounds) {
+                const bounds = districtLayer.getBounds();
+                if (bounds && bounds.isValid()) {
+                    map.fitBounds(bounds.pad(0.35));
+                }
+            } else {
+                map.setView([lat, lon], 10);
+            }
 
-            map.setView(
-                [lat, lon],
-                10
-            );
-
-            marker.openPopup();
-
+            districtLayer.openPopup();
         };
-
 
         districtList.appendChild(row);
 
@@ -1052,13 +1127,18 @@ function renderGIS(records) {
 }
 
 
-function clearMarkers() {
+function clearMapLayers() {
 
     districtMarkers.forEach(
         marker => map.removeLayer(marker)
     );
 
+    districtPolygons.forEach(
+        polygon => map.removeLayer(polygon)
+    );
+
     districtMarkers = [];
+    districtPolygons = [];
 
 }
 
