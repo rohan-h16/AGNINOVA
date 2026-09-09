@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 
 class LiveWeatherFallbackTest(unittest.TestCase):
-    def test_weather_endpoint_works_without_tomorrow_key(self):
+    def test_weather_endpoint_works_with_open_meteo(self):
         original = os.environ.get("TOMORROW_API_KEY")
         os.environ.pop("TOMORROW_API_KEY", None)
 
@@ -24,6 +24,7 @@ class LiveWeatherFallbackTest(unittest.TestCase):
             self.assertIn("risk_level", payload)
             self.assertIn("location", payload)
             self.assertGreater(payload["temperature"], -50)
+            self.assertIn("Open-Meteo", str(payload.get("data_source", "")))
         finally:
             if original is not None:
                 os.environ["TOMORROW_API_KEY"] = original

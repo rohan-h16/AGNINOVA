@@ -15,7 +15,7 @@ from pydantic import BaseModel
 # ============================================================
 # AGNINOVA
 # Extreme Heatwave Early Warning & Human Thermal Stress Platform
-# Tomorrow.io Weather Intelligence
+# Open-Meteo Live Weather Intelligence
 # ============================================================
 
 app = FastAPI(
@@ -26,7 +26,7 @@ app = FastAPI(
 
 
 def get_active_weather_provider():
-    return "Tomorrow.io"
+    return "Open-Meteo"
 
 
 # ============================================================
@@ -43,21 +43,19 @@ app.add_middleware(
 
 
 # ============================================================
-# TOMORROW.IO CONFIG
+# OPEN-METEO CONFIG
 # ============================================================
 
 TOMORROW_API_KEY = os.getenv(
     "TOMORROW_API_KEY",
-    "u3aoBw2R9qS7IhKWPWSY5gH4FhGuexQG"
+    ""
 ).strip()
 
-TOMORROW_URL = (
-    "https://api.tomorrow.io/v4/weather/realtime"
+OPEN_METEO_URL = (
+    "https://api.open-meteo.com/v1/forecast"
 )
 
-TOMORROW_FORECAST_URL = (
-    "https://api.tomorrow.io/v4/weather/forecast"
-)
+OPEN_METEO_FORECAST_URL = OPEN_METEO_URL
 
 DB_FILE = os.path.join(
     os.path.dirname(__file__),
@@ -875,20 +873,12 @@ async def send_free_alert(phone_number, message):
 
 
 # ============================================================
-# TOMORROW.IO API KEY CHECK
+# API KEY CHECK
 # ============================================================
 
 def check_api_key():
 
-    if not TOMORROW_API_KEY:
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "TOMORROW_API_KEY is not configured. "
-                "Run: export TOMORROW_API_KEY=\"YOUR_KEY\""
-            )
-        )
+    return True
 
 
 def get_weather_code_label(weather_code):
@@ -1164,89 +1154,60 @@ def save_weather(data):
 
 
 # ============================================================
-# TOMORROW.IO REQUEST
+# OPEN-METEO REQUEST
 # ============================================================
 
-async def tomorrow_request(
-    url,
+async def open_meteo_request(
     latitude,
     longitude
 ):
 
-    check_api_key()
-
     params = {
-
-        "location": f"{latitude},{longitude}",
-
-        "apikey": TOMORROW_API_KEY
+        "latitude": latitude,
+        "longitude": longitude,
+        "current": "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,pressure_msl,cloud_cover,weather_code",
+        "hourly": "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,precipitation_probability,uv_index",
+        "forecast_days": 5,
+        "timezone": "auto",
+        "temperature_unit": "celsius",
+        "wind_speed_unit": "kmh",
     }
 
+    def fetch():
+        try:
+            with httpx.Client(timeout=20) as client:
+                return client.get(OPEN_METEO_URL, params=params)
+        except httpx.RequestError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Open-Meteo connection failed: {error}"
+            )
+
     try:
-
-        async with httpx.AsyncClient(
-            timeout=15
-        ) as client:
-
-            response = await client.get(
-                url,
-                params=params
-            )
-
-    except httpx.RequestError as error:
-
+        response = await asyncio.to_thread(fetch)
+    except HTTPException:
+        raise
+    except Exception as error:
         raise HTTPException(
             status_code=502,
-            detail=(
-                f"Tomorrow.io connection failed: {error}"
-            )
-        )
-
-    if response.status_code in [401, 403]:
-
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Invalid or unauthorized Tomorrow.io API key."
-            )
-        )
-
-    if response.status_code == 429:
-
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Tomorrow.io rate limit reached. "
-                "Please wait before making another request."
-            )
+            detail=f"Open-Meteo connection failed: {error}"
         )
 
     if response.status_code != 200:
-
         try:
-
-            error_data = response.json()
-
-            message = str(
-                error_data
-            )
-
+            message = response.json()
         except Exception:
-
             message = response.text
-
         raise HTTPException(
             status_code=502,
-            detail=(
-                f"Tomorrow.io error: {message}"
-            )
+            detail=f"Open-Meteo error: {message}"
         )
 
     return response.json()
 
 
 # ============================================================
-# GET VALUE FROM TOMORROW.IO
+# GET VALUE FROM OPEN-METEO
 # ============================================================
 
 def get_weather_value(
@@ -1312,28 +1273,18 @@ async def get_current_weather(
 
             return result
 
-    raw = await tomorrow_request(
-        TOMORROW_URL,
-        latitude,
-        longitude
-    )
+    raw = await open_meteo_request(latitude, longitude)
 
-    data = raw.get("data", {})
-    values = data.get("values", {})
-
-    temperature = get_weather_value(values, "temperature")
-    humidity = get_weather_value(values, "humidity")
-    apparent_temperature = get_weather_value(values, "temperatureApparent", temperature)
-    wind_speed = get_weather_value(values, "windSpeed") * 3.6
-    pressure = get_weather_value(values, "pressureSurfaceLevel", 0)
-    clouds = get_weather_value(values, "cloudCover", 0)
-    weather_code = values.get("weatherCode")
-    weather_description = (
-        f"Weather code {weather_code}"
-        if weather_code is not None
-        else "Current weather"
-    )
-    weather_time = data.get("time")
+    current = raw.get("current", {})
+    temperature = get_weather_value(current, "temperature_2m")
+    humidity = get_weather_value(current, "relative_humidity_2m")
+    apparent_temperature = get_weather_value(current, "apparent_temperature", temperature)
+    wind_speed = get_weather_value(current, "wind_speed_10m")
+    pressure = get_weather_value(current, "pressure_msl", 0)
+    clouds = get_weather_value(current, "cloud_cover", 0)
+    weather_code = current.get("weather_code")
+    weather_description = get_weather_code_label(weather_code)
+    weather_time = current.get("time")
 
     result = build_weather_result(
         location,
@@ -1352,7 +1303,7 @@ async def get_current_weather(
 
     result["weather_code"] = weather_code
     result["location_name"] = location
-    result["data_source"] = "Tomorrow.io"
+    result["data_source"] = "Open-Meteo"
 
     weather_cache[location] = {
         "time": time.time(),
@@ -1484,7 +1435,7 @@ async def weather(
     # Save only fresh observations.
     if data.get(
         "data_source"
-    ) == "Tomorrow.io":
+    ) == "Open-Meteo":
 
         save_weather(
             data
@@ -1564,35 +1515,44 @@ async def forecast(
 
     latitude, longitude = coords
 
-    raw = await tomorrow_request(
-        TOMORROW_FORECAST_URL,
-        latitude,
-        longitude
-    )
+    raw = await open_meteo_request(latitude, longitude)
 
-    timelines = raw.get("timelines", {})
-    hourly = timelines.get("hourly", [])
+    hourly = raw.get("hourly", {})
+    times = hourly.get("time", [])
+    temperatures = hourly.get("temperature_2m", [])
+    humidities = hourly.get("relative_humidity_2m", [])
+    feels_like = hourly.get("apparent_temperature", [])
+    wind_speeds = hourly.get("wind_speed_10m", [])
+    uv_index_values = hourly.get("uv_index", [])
+    precipitation_values = hourly.get("precipitation_probability", [])
 
-    if not hourly:
+    if not times:
         raise HTTPException(
             status_code=502,
-            detail="No forecast data received from Tomorrow.io."
+            detail="No forecast data received from Open-Meteo."
         )
 
     daily = {}
 
-    for item in hourly:
-        time_string = item.get("time")
+    for index, time_string in enumerate(times):
         if not time_string:
             continue
 
         try:
-            dt = datetime.fromisoformat(time_string.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(time_string)
         except Exception:
             continue
 
         local_date = dt.date().isoformat()
-        daily.setdefault(local_date, []).append(item)
+        daily.setdefault(local_date, []).append({
+            "time": time_string,
+            "temperature": temperatures[index] if index < len(temperatures) else 0,
+            "humidity": humidities[index] if index < len(humidities) else 0,
+            "apparent_temperature": feels_like[index] if index < len(feels_like) else 0,
+            "wind_speed": wind_speeds[index] if index < len(wind_speeds) else 0,
+            "uv_index": uv_index_values[index] if index < len(uv_index_values) else 0,
+            "precipitation_probability": precipitation_values[index] if index < len(precipitation_values) else 0,
+        })
 
     today = datetime.now(timezone.utc).date()
     dates = [
@@ -1626,13 +1586,12 @@ async def forecast(
         if not selected:
             continue
 
-        values = selected.get("values", {})
-        temperature = get_weather_value(values, "temperature")
-        humidity = get_weather_value(values, "humidity")
-        apparent_temperature = get_weather_value(values, "temperatureApparent", temperature)
-        wind_speed = get_weather_value(values, "windSpeed") * 3.6
-        uv_index = get_weather_value(values, "uvIndex", 0)
-        precipitation_probability = get_weather_value(values, "precipitationProbability", 0)
+        temperature = get_weather_value(selected, "temperature")
+        humidity = get_weather_value(selected, "humidity")
+        apparent_temperature = get_weather_value(selected, "apparent_temperature", temperature)
+        wind_speed = get_weather_value(selected, "wind_speed")
+        uv_index = get_weather_value(selected, "uv_index", 0)
+        precipitation_probability = get_weather_value(selected, "precipitation_probability", 0)
 
         temperature_max = max(temperatures) if temperatures else temperature
         temperature_min = min(temperatures) if temperatures else temperature
@@ -1671,7 +1630,7 @@ async def forecast(
             "risk_score": round(health_risk, 2),
             "risk_level": risk_level,
             "advisory": get_advisory(risk_level),
-            "data_source": "Tomorrow.io",
+            "data_source": "Open-Meteo",
             "uv_index": round(uv_index, 2),
             "precipitation_probability": round(precipitation_probability, 2)
         })
@@ -1856,7 +1815,7 @@ async def get_gis_data():
             len(clean_results),
 
         "data_source":
-            "Tomorrow.io",
+            "Open-Meteo",
 
         "updated_at":
             datetime.now(
