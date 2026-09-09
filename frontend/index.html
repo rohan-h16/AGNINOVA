@@ -195,6 +195,28 @@
 
             </div>
 
+            <div class="top-risk-panel">
+                <div class="top-risk-header">
+                    <div>
+                        <span class="label">TOP 5 HIGH-RISK DISTRICTS</span>
+                        <h3>Current heat hotspots</h3>
+                    </div>
+
+                    <div class="data-status-pill">
+                        <span class="status-dot" id="apiSignalDot"></span>
+                        <span id="apiSourceLabel">API: detecting...</span>
+                    </div>
+                </div>
+
+                <div id="topRiskList" class="top-risk-list">
+                    Loading hotspot list...
+                </div>
+
+                <div class="refresh-status">
+                    <small id="refreshStatus">Auto-refresh: every 60 seconds</small>
+                </div>
+            </div>
+
 
             <!-- WEATHER CARDS -->
             <div class="metrics-grid">

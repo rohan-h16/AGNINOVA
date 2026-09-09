@@ -25,8 +25,10 @@ let currentWeather = null;
 let map = null;
 let forecastChart = null;
 let districtMarkers = [];
+let autoRefreshTimer = null;
 
 let selectedDistrict = "Bengaluru Urban";
+const AUTO_REFRESH_MS = 60000;
 
 
 /* ============================================================
@@ -38,6 +40,8 @@ document.addEventListener("DOMContentLoaded", () => {
     initializeDistricts();
 
     initializeMap();
+
+    initializeAutoRefresh();
 
     checkBackend();
 
@@ -203,6 +207,8 @@ async function checkBackend() {
     const text =
         document.getElementById("connectionText");
 
+    const apiSignal = document.getElementById("apiSignalDot");
+    const apiLabel = document.getElementById("apiSourceLabel");
 
     try {
 
@@ -213,20 +219,36 @@ async function checkBackend() {
             throw new Error("Backend error");
         }
 
+        const data = await response.json();
+        const source = data.weather_provider || "Live weather";
 
         dot.classList.add("online");
+        if (apiSignal) apiSignal.classList.add("online");
 
         text.textContent =
             "Backend Online";
+
+        if (apiLabel) {
+            apiLabel.textContent = `API: ${source}`;
+        }
+
+        updateRefreshStatus("Auto-refresh: every 60 seconds");
 
     }
 
     catch (error) {
 
         dot.classList.remove("online");
+        if (apiSignal) apiSignal.classList.remove("online");
 
         text.textContent =
             "Backend Offline";
+
+        if (apiLabel) {
+            apiLabel.textContent = "API: fallback demo";
+        }
+
+        updateRefreshStatus("Auto-refresh: every 60 seconds (fallback mode)");
 
         console.warn(
             "FastAPI backend unavailable:",
@@ -247,6 +269,36 @@ async function loadDashboard() {
     await checkBackend();
 
     await loadWeather();
+
+    await loadHotspotList();
+
+}
+
+
+function initializeAutoRefresh() {
+
+    if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+    }
+
+    autoRefreshTimer = setInterval(() => {
+        loadDashboard();
+    }, AUTO_REFRESH_MS);
+
+    updateRefreshStatus();
+
+}
+
+
+function updateRefreshStatus(text) {
+
+    const refreshEl = document.getElementById("refreshStatus");
+
+    if (!refreshEl) {
+        return;
+    }
+
+    refreshEl.textContent = text || "Auto-refresh: every 60 seconds";
 
 }
 
@@ -375,6 +427,18 @@ function getAdvisoryText(level) {
    ============================================================ */
 
 function renderWeather(data) {
+
+    const source = String(data.data_source || "Open-Meteo").toUpperCase();
+    const apiLabel = document.getElementById("apiSourceLabel");
+
+    if (apiLabel) {
+        apiLabel.textContent = `API: ${source}`;
+    }
+
+    const apiSignal = document.getElementById("apiSignalDot");
+    if (apiSignal) {
+        apiSignal.classList.add("online");
+    }
 
     setValue(
         "temperature",
@@ -668,6 +732,102 @@ async function loadGIS() {
         renderGIS(generateDemoGIS());
 
     }
+
+}
+
+
+async function loadHotspotList() {
+
+    const container = document.getElementById("topRiskList");
+
+    if (!container) {
+        return;
+    }
+
+    container.innerHTML = "Loading hotspot list...";
+
+    try {
+        const response = await fetch(`${BACKEND_URL}/gis-risk`);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const records = Array.isArray(data) ? data : (data.districts || data.data || []);
+        const top5 = records
+            .map(item => ({
+                ...item,
+                score: Number(item.risk_score ?? item.health_risk ?? 0),
+                level: String(item.risk_level ?? item.health_level ?? "LOW").toUpperCase()
+            }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5);
+
+        renderHotspotList(top5);
+    }
+
+    catch (error) {
+        console.warn("Hotspot list unavailable; using demo ranking.", error);
+        const demo = generateDemoGIS()
+            .map(item => ({
+                ...item,
+                score: Number(item.risk_score ?? item.health_risk ?? 0),
+                level: String(item.risk_level ?? item.health_level ?? "LOW").toUpperCase()
+            }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5);
+
+        renderHotspotList(demo);
+    }
+
+}
+
+
+function renderHotspotList(records) {
+
+    const container = document.getElementById("topRiskList");
+
+    if (!container) {
+        return;
+    }
+
+    if (!records || records.length === 0) {
+        container.innerHTML = '<div class="empty-state">No hotspot data available.</div>';
+        return;
+    }
+
+    container.innerHTML = "";
+
+    records.forEach((item, index) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "top-risk-item";
+
+        const district = item.location || "District";
+        const score = Number(item.score ?? item.risk_score ?? item.health_risk ?? 0);
+        const level = String(item.level || item.risk_level || item.health_level || "LOW").toUpperCase();
+
+        row.innerHTML = `
+            <div class="top-risk-rank">#${index + 1}</div>
+            <div class="top-risk-meta">
+                <strong>${district}</strong>
+                <small>${level} • ${score.toFixed(1)}/100</small>
+            </div>
+            <span class="top-risk-pill ${level.toLowerCase()}">${level}</span>
+        `;
+
+        row.addEventListener("click", () => {
+            selectedDistrict = district;
+            const select = document.getElementById("districtSelect");
+            if (select) {
+                select.value = district;
+            }
+            loadDashboard();
+        });
+
+        container.appendChild(row);
+    });
 
 }
 
