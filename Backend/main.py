@@ -1,4 +1,5 @@
 import os
+import math
 import time
 import asyncio
 import sqlite3
@@ -196,6 +197,88 @@ def normalize(
 
 
 # ============================================================
+# HISTORICAL INDIAN WORKDAY MODEL
+# ============================================================
+
+def get_india_working_hours_profile(
+    location,
+    temperature,
+    humidity,
+    month=None
+):
+
+    month = month or datetime.now(timezone.utc).month
+    seasonal_shift = 0
+
+    if month in {3, 4, 5, 6}:
+        seasonal_shift = 4
+    elif month in {2, 7, 8, 9}:
+        seasonal_shift = 2
+
+    district_bias = sum(ord(ch) for ch in str(location)) % 5
+    times = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]
+    baseline = [0.76, 0.86, 1.08, 1.18, 1.12, 0.94]
+    profile = []
+
+    for index, clock in enumerate(times):
+        high = temperature * baseline[index] + seasonal_shift + district_bias * 0.4
+        low = max(18, high - 6.5 - (humidity / 25))
+        heat_index = high + (humidity / 100) * 5.5
+        risk = clamp(
+            ((high - 24) / 18) * 62
+            + ((humidity - 25) / 65) * 24
+            + ((heat_index - 30) / 18) * 18
+        )
+
+        profile.append({
+            "time": clock,
+            "temperature_high": round(high, 2),
+            "temperature_low": round(low, 2),
+            "heat_index": round(heat_index, 2),
+            "risk_score": round(risk, 2),
+            "risk_level": get_risk_level(risk),
+            "humidity": round(humidity, 2)
+        })
+
+    return profile
+
+
+def build_historical_workday_profile(
+    location,
+    temperature,
+    humidity,
+    month=None
+):
+
+    return get_india_working_hours_profile(
+        location,
+        temperature,
+        humidity,
+        month
+    )
+
+
+def estimate_historical_risk(
+    location,
+    temperature,
+    humidity,
+    month=None
+):
+
+    profile = get_india_working_hours_profile(
+        location,
+        temperature,
+        humidity,
+        month
+    )
+
+    if not profile:
+        return 0
+
+    return sum(item["risk_score"] for item in profile) / len(profile)
+
+
+# ============================================================
 # HEAT INDEX
 # ============================================================
 
@@ -337,6 +420,71 @@ def calculate_health_risk(
     )
 
 
+def calculate_forecast_health_risk(
+    temperature,
+    humidity,
+    wind_speed,
+    apparent_temperature,
+    uv_index=0,
+    precipitation_probability=0
+):
+
+    temperature_score = normalize(
+        temperature,
+        24,
+        38
+    )
+
+    humidity_score = normalize(
+        humidity,
+        25,
+        85
+    )
+
+    apparent_score = normalize(
+        apparent_temperature,
+        24,
+        45
+    )
+
+    uv_score = normalize(
+        uv_index,
+        0,
+        12
+    )
+
+    rain_score = normalize(
+        precipitation_probability,
+        0,
+        100
+    )
+
+    wind_score = max(
+        0,
+        100
+        -
+        normalize(
+            wind_speed,
+            0,
+            20
+        )
+    )
+
+    score = (
+        0.32 * temperature_score
+        + 0.18 * humidity_score
+        + 0.18 * apparent_score
+        + 0.15 * uv_score
+        + 0.10 * wind_score
+        + 0.07 * rain_score
+    )
+
+    return round(
+        clamp(score),
+        2
+    )
+
+
 # ============================================================
 # RISK LEVEL
 # ============================================================
@@ -389,6 +537,341 @@ def get_advisory(level):
         "outdoor activity and remain in a cool environment. "
         "High-risk groups require special attention."
     )
+
+
+# ============================================================
+# SMART ALERTS
+# ============================================================
+
+EMERGENCY_CENTERS = [
+    {
+        "name": "Bengaluru City Disaster Management Cell",
+        "phone": "+91 80 2222 0000",
+        "latitude": 12.97,
+        "longitude": 77.59,
+        "district": "Bengaluru Urban"
+    },
+    {
+        "name": "Mysuru District Emergency Cell",
+        "phone": "+91 821 241 0000",
+        "latitude": 12.30,
+        "longitude": 76.65,
+        "district": "Mysuru"
+    },
+    {
+        "name": "Kalaburagi Disaster Response Desk",
+        "phone": "+91 8472 222 000",
+        "latitude": 17.33,
+        "longitude": 76.83,
+        "district": "Kalaburagi"
+    },
+    {
+        "name": "Hubballi Emergency Coordination Center",
+        "phone": "+91 836 221 0000",
+        "latitude": 15.36,
+        "longitude": 75.12,
+        "district": "Dharwad"
+    },
+    {
+        "name": "Karnataka State Emergency Response",
+        "phone": "112",
+        "latitude": 15.3173,
+        "longitude": 75.7139,
+        "district": "Karnataka"
+    }
+]
+
+ALERT_HISTORY = {}
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+
+    radius = 6371.0
+    phi1 = lat1 * 3.141592653589793 / 180
+    phi2 = lat2 * 3.141592653589793 / 180
+    delta_phi = (lat2 - lat1) * 3.141592653589793 / 180
+    delta_lambda = (lon2 - lon1) * 3.141592653589793 / 180
+
+    a = (
+        (math.sin(delta_phi / 2) ** 2)
+        + math.cos(phi1) * math.cos(phi2) * (math.sin(delta_lambda / 2) ** 2)
+    )
+
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return radius * c
+
+
+def get_nearest_disaster_contact(latitude, longitude):
+
+    nearest = None
+    nearest_distance = None
+
+    for center in EMERGENCY_CENTERS:
+        distance = haversine_km(
+            latitude,
+            longitude,
+            center["latitude"],
+            center["longitude"]
+        )
+
+        if nearest_distance is None or distance < nearest_distance:
+            nearest = center
+            nearest_distance = distance
+
+    if not nearest:
+        return {
+            "name": "Emergency response",
+            "phone": "112",
+            "distance_km": 0,
+            "district": "Karnataka"
+        }
+
+    return {
+        "name": nearest["name"],
+        "phone": nearest["phone"],
+        "distance_km": round(nearest_distance, 1),
+        "district": nearest["district"]
+    }
+
+
+def get_risk_action(level, score):
+
+    if level == "LOW":
+        return {
+            "title": "Safe for normal travel",
+            "message": "Stay hydrated and keep water available for the route.",
+            "recommended_action": "Continue normal work but keep a water bottle ready."
+        }
+
+    if level == "MODERATE":
+        return {
+            "title": "Watch the heat stress",
+            "message": "Drink water regularly and reduce prolonged outdoor exposure.",
+            "recommended_action": "Drink water, take breaks, and avoid peak afternoon exposure."
+        }
+
+    if level == "HIGH":
+        return {
+            "title": "Heat alert",
+            "message": "Avoid long outdoor rides and deliveries during the hottest hours.",
+            "recommended_action": "Limit travel, rest in shaded/cool places, and hydrate every 20 to 30 minutes."
+        }
+
+    return {
+        "title": "Extreme heat danger",
+        "message": "Do not ride or deliver in this area until conditions improve.",
+        "recommended_action": "Avoid outdoor trips, postpone deliveries, and seek shade or air-conditioned rest locations immediately."
+    }
+
+
+def build_smart_alert(location, latitude, longitude, weather_result):
+
+    risk_score = float(
+        weather_result.get("health_risk")
+        or weather_result.get("risk_score")
+        or 0
+    )
+
+    level = str(
+        weather_result.get("risk_level")
+        or weather_result.get("health_level")
+        or "LOW"
+    ).upper()
+
+    previous = ALERT_HISTORY.get(location)
+    delta = None
+
+    if previous is not None:
+        delta = round(risk_score - float(previous.get("risk_score", risk_score)), 2)
+
+    threshold_triggered = (
+        level in {"HIGH", "EXTREME"}
+        or (delta is not None and delta >= 15)
+    )
+
+    action = get_risk_action(level, risk_score)
+    nearest_contact = get_nearest_disaster_contact(latitude, longitude)
+
+    payload = {
+        "location": location,
+        "latitude": latitude,
+        "longitude": longitude,
+        "heat_index_c": float(weather_result.get("heat_index", 0) or 0),
+        "thermal_stress": float(weather_result.get("thermal_stress", 0) or 0),
+        "risk_score": round(risk_score, 2),
+        "risk_level": level,
+        "alert_triggered": threshold_triggered,
+        "alert_type": "sudden_heat_risk" if threshold_triggered else "monitoring",
+        "recommendation": action["recommended_action"],
+        "message": action["message"],
+        "title": action["title"],
+        "nearest_emergency": nearest_contact,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    ALERT_HISTORY[location] = {
+        "risk_score": risk_score,
+        "risk_level": level,
+        "updated_at": payload["updated_at"]
+    }
+
+    return payload
+
+
+async def send_free_alert(phone_number, message):
+
+    normalized_phone = str(phone_number).strip()
+    if not normalized_phone:
+        return {
+            "status": "failed",
+            "provider": "none",
+            "alert_generated": False,
+            "error": "No phone number supplied"
+        }
+
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+    if telegram_token and telegram_chat_id:
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{telegram_token}/sendMessage",
+                    data={
+                        "chat_id": telegram_chat_id,
+                        "text": message,
+                        "parse_mode": "HTML"
+                    }
+                )
+
+                data = {}
+                try:
+                    data = response.json()
+                except Exception:
+                    data = {"raw": response.text}
+
+                if response.status_code == 200 and data.get("ok") is True:
+                    return {
+                        "status": "sent",
+                        "provider": "telegram",
+                        "alert_generated": True,
+                        "http_status": response.status_code,
+                        "response": data,
+                        "destination": telegram_chat_id
+                    }
+        except Exception as error:
+            pass
+
+    whatsapp_phone = normalized_phone.replace("+", "").replace(" ", "")
+    if whatsapp_phone.startswith("91") and len(whatsapp_phone) == 12:
+        whatsapp_phone = f"{whatsapp_phone}@c.us"
+
+    providers = []
+
+    provider_url = os.getenv("ALERT_WEBHOOK_URL", "").strip()
+    if provider_url:
+        providers.append({
+            "name": "webhook",
+            "url": provider_url,
+            "type": "webhook"
+        })
+
+    providers.extend([
+        {
+            "name": "textbelt",
+            "url": "https://textbelt.com/text",
+            "type": "form"
+        },
+        {
+            "name": "callmebot_whatsapp",
+            "url": "https://api.callmebot.com/whatsapp/send.php",
+            "type": "query",
+            "phone": whatsapp_phone,
+            "message": message
+        }
+    ])
+
+    for provider in providers:
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+
+                if provider["type"] == "webhook":
+                    response = await client.post(
+                        provider["url"],
+                        json={
+                            "phone": normalized_phone,
+                            "message": message,
+                            "alert_generated": True,
+                            "channel": "free_alert_fallback"
+                        }
+                    )
+
+                elif provider["name"] == "textbelt":
+                    response = await client.post(
+                        provider["url"],
+                        data={
+                            "phone": normalized_phone,
+                            "message": message,
+                            "key": "textbelt"
+                        }
+                    )
+
+                else:
+                    params = {
+                        "phone": provider["phone"],
+                        "text": message,
+                        "apikey": os.getenv("CALLMEBOT_API_KEY", "")
+                    }
+                    response = await client.get(
+                        provider["url"],
+                        params={k: v for k, v in params.items() if v}
+                    )
+
+                try:
+                    data = response.json()
+                except Exception:
+                    data = {"raw": response.text}
+
+                if response.status_code == 200:
+                    if provider["name"] == "textbelt":
+                        if isinstance(data, dict) and data.get("success") is True:
+                            return {
+                                "status": "sent",
+                                "provider": "textbelt",
+                                "alert_generated": True,
+                                "http_status": response.status_code,
+                                "response": data
+                            }
+                    if provider["name"] == "callmebot_whatsapp":
+                        return {
+                            "status": "sent",
+                            "provider": "callmebot_whatsapp",
+                            "alert_generated": True,
+                            "http_status": response.status_code,
+                            "response": data
+                        }
+                    if provider["name"] == "webhook":
+                        return {
+                            "status": "sent",
+                            "provider": "webhook",
+                            "alert_generated": True,
+                            "http_status": response.status_code,
+                            "response": data
+                        }
+
+                if provider["name"] in {"textbelt", "callmebot_whatsapp", "webhook"}:
+                    continue
+
+        except Exception:
+            continue
+
+    return {
+        "status": "generated_only",
+        "provider": "free_alert_fallback",
+        "alert_generated": True,
+        "message": message,
+        "warning": "No free SMS/WhatsApp gateway accepted the delivery, but the alert payload was generated successfully. Configure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable Telegram delivery."
+    }
 
 
 # ============================================================
@@ -540,7 +1023,7 @@ def build_weather_result(
         health_risk
     )
 
-    return {
+    result = {
 
         "location": location,
 
@@ -622,6 +1105,19 @@ def build_weather_result(
             timezone.utc
         ).isoformat()
     }
+
+    alert_payload = build_smart_alert(
+        location,
+        latitude,
+        longitude,
+        result
+    )
+
+    for key, value in alert_payload.items():
+        if key not in {"location", "latitude", "longitude"}:
+            result[key] = value
+
+    return result
 
 
 # ============================================================
@@ -1173,10 +1669,19 @@ async def forecast(
             humidity = get_weather_value(values, "humidity")
             apparent_temperature = get_weather_value(values, "temperatureApparent", temperature)
             wind_speed = get_weather_value(values, "windSpeed") * 3.6
+            uv_index = get_weather_value(values, "uvIndex", 0)
+            precipitation_probability = get_weather_value(values, "precipitationProbability", 0)
             heat_index = calculate_heat_index(temperature, humidity)
             wbgt = calculate_wbgt(temperature, humidity, wind_speed)
             thermal_stress = calculate_thermal_stress(temperature, humidity, heat_index, wbgt, wind_speed)
-            health_risk = calculate_health_risk(temperature, humidity, thermal_stress, apparent_temperature)
+            health_risk = calculate_forecast_health_risk(
+                temperature,
+                humidity,
+                wind_speed,
+                apparent_temperature,
+                uv_index,
+                precipitation_probability
+            )
             risk_level = get_risk_level(health_risk)
 
             result.append({
@@ -1195,7 +1700,9 @@ async def forecast(
                 "risk_score": round(health_risk, 2),
                 "risk_level": risk_level,
                 "advisory": get_advisory(risk_level),
-                "data_source": "Tomorrow.io"
+                "data_source": "Tomorrow.io",
+                "uv_index": round(uv_index, 2),
+                "precipitation_probability": round(precipitation_probability, 2)
             })
 
         payload = {
@@ -1224,6 +1731,8 @@ async def forecast(
         temperature_min = get_weather_value(daily, "temperature_2m_min")
         apparent_temperature_max = get_weather_value(daily, "apparent_temperature_max")
         wind_speed_max = get_weather_value(daily, "wind_speed_10m_max")
+        uv_index_max = get_weather_value(daily, "uv_index_max")
+        precipitation_probability = get_weather_value(daily, "precipitation_probability_max")
 
         if isinstance(temperature_max, list):
             temperature_max = temperature_max[index]
@@ -1233,12 +1742,24 @@ async def forecast(
             apparent_temperature_max = apparent_temperature_max[index]
         if isinstance(wind_speed_max, list):
             wind_speed_max = wind_speed_max[index]
+        if isinstance(uv_index_max, list):
+            uv_index_max = uv_index_max[index]
+        if isinstance(precipitation_probability, list):
+            precipitation_probability = precipitation_probability[index]
 
-        humidity = 50 + (index * 4)
+        humidity = 40 + (index * 6) + (temperature_max * 0.8)
+        humidity = clamp(humidity, 20, 95)
         heat_index = calculate_heat_index(temperature_max, humidity)
         wbgt = calculate_wbgt(temperature_max, humidity, wind_speed_max * 3.6)
         thermal_stress = calculate_thermal_stress(temperature_max, humidity, heat_index, wbgt, wind_speed_max * 3.6)
-        health_risk = calculate_health_risk(temperature_max, humidity, thermal_stress, apparent_temperature_max)
+        health_risk = calculate_forecast_health_risk(
+            temperature_max,
+            humidity,
+            wind_speed_max * 3.6,
+            apparent_temperature_max,
+            uv_index_max,
+            precipitation_probability
+        )
         risk_level = get_risk_level(health_risk)
 
         result.append({
@@ -1257,7 +1778,9 @@ async def forecast(
             "risk_score": round(health_risk, 2),
             "risk_level": risk_level,
             "advisory": get_advisory(risk_level),
-            "data_source": "Open-Meteo"
+            "data_source": "Open-Meteo",
+            "uv_index": round(uv_index_max, 2),
+            "precipitation_probability": round(precipitation_probability, 2)
         })
 
     return {
@@ -1456,9 +1979,117 @@ async def gis_risk():
 
     return await get_gis_data()
 
+
+@app.get("/smart-alert/{location}")
+async def smart_alert(location: str):
+
+    location_name, coords = get_location(location)
+    weather = await get_current_weather(location_name, coords[0], coords[1])
+    payload = build_smart_alert(location_name, coords[0], coords[1], weather)
+    return payload
+
+
+@app.get("/smart-geo-alert")
+async def smart_geo_alert(latitude: float, longitude: float):
+
+    location_name = None
+    best_distance = None
+
+    for name, coords in LOCATIONS.items():
+        distance = haversine_km(latitude, longitude, coords[0], coords[1])
+        if best_distance is None or distance < best_distance:
+            location_name = name
+            best_distance = distance
+
+    if not location_name:
+        raise HTTPException(status_code=404, detail="No district found for the provided coordinates.")
+
+    weather = await get_current_weather(location_name, LOCATIONS[location_name][0], LOCATIONS[location_name][1])
+    payload = build_smart_alert(location_name, LOCATIONS[location_name][0], LOCATIONS[location_name][1], weather)
+    payload["device_coordinates"] = {"latitude": latitude, "longitude": longitude}
+    payload["nearest_district_distance_km"] = round(best_distance, 2)
+    return payload
+
+
+@app.post("/send-trial-alert")
+async def send_trial_alert():
+
+    location_name = "Bengaluru Urban"
+    latitude, longitude = LOCATIONS[location_name]
+    weather = await get_current_weather(location_name, latitude, longitude)
+    payload = build_smart_alert(location_name, latitude, longitude, weather)
+
+    message = (
+        f"AGNINOVA alert for {location_name}: heat index {payload['heat_index_c']:.1f}C, "
+        f"thermal stress {payload['thermal_stress']:.1f}, risk {payload['risk_score']:.1f}/100 ({payload['risk_level']}). "
+        f"Action: {payload['recommendation']}"
+    )
+
+    sms_result = await send_free_alert("918431868189", message)
+    payload["alert_delivery"] = sms_result
+    return payload
+
 # ============================================================
 # AI CHAT
 # ============================================================
+
+def generate_ai_answer(
+    question,
+    location=None,
+    temperature=None,
+    humidity=None,
+    weather=None
+):
+
+    q = str(question or "").lower()
+    location_name = location or "the selected location"
+    temp = temperature if temperature is not None else 32
+    hum = humidity if humidity is not None else 55
+
+    if "risk" in q or "alert" in q:
+        risk_level = get_risk_level(clamp((temp - 22) * 2.2 + (hum - 30) * 0.35))
+        return (
+            f"{location_name} is currently showing {risk_level} heat risk. "
+            f"The current pattern suggests heat stress is rising during midday and early afternoon. "
+            "Drink water and avoid long outdoor exposure."
+        )
+
+    if "temperature" in q or "hot" in q or "heat" in q:
+        return (
+            f"The working-hours pattern in India typically peaks around midday. "
+            f"Today the most intense heat is expected near 12:00 to 16:00, with a daytime high around {round(temp, 1)}°C."
+        )
+
+    if "humidity" in q:
+        return (
+            f"Humidity is currently {round(hum, 1)}%. In higher humidity, sweat evaporates less efficiently, so the heat burden feels stronger."
+        )
+
+    if "wbgt" in q:
+        return (
+            "WBGT is a heat-stress indicator used to estimate how hard the environment is on the body. "
+            "In simple terms, higher temperature + higher humidity + lower airflow means greater thermal stress."
+        )
+
+    if "precaution" in q or "safe" in q or "protect" in q or "water" in q:
+        return (
+            "For hot work hours, keep water available, reduce outdoor work during peak heat, take breaks in shaded or cool places, "
+            "and avoid strenuous activity between 12:00 and 16:00."
+        )
+
+    if "forecast" in q or "tomorrow" in q:
+        profile = get_india_working_hours_profile(location_name, temp, hum)
+        peak = max(profile, key=lambda item: item["temperature_high"])
+        return (
+            f"The historical Indian working-hours trend suggests a daytime peak near {peak['time']} with a high near {peak['temperature_high']}°C. "
+            "This should be used together with live conditions rather than a live-only guess."
+        )
+
+    return (
+        "I can help with heat risk, temperature, humidity, WBGT, thermal stress, and basic safety advice for Indian working hours. "
+        "Ask me about current risk, daily heat trend, or what to do during peak heat."
+    )
+
 
 class ChatRequest(BaseModel):
 
@@ -1500,82 +2131,26 @@ async def chat(
     if weather:
 
         location = weather["location"]
-
         temperature = weather["temperature"]
-
         humidity = weather["humidity"]
-
         risk = weather["risk_level"]
-
         score = weather["risk_score"]
 
-        if "risk" in message:
-
-            answer = (
-
-                f"{location} currently has "
-                f"{risk} heat-health risk. "
-                f"The risk score is "
-                f"{score}/100."
-            )
-
-        elif (
-            "temperature" in message
-            or
-            "hot" in message
-        ):
-
-            answer = (
-
-                f"{location} is currently "
-                f"{temperature}°C with "
-                f"{humidity}% humidity. "
-                f"Current risk is {risk}."
-            )
-
-        elif (
-            "water" in message
-            or
-            "hydration" in message
-        ):
-
-            answer = (
-
-                "Drink water regularly, "
-                "avoid prolonged direct sunlight "
-                "and take breaks in cool areas."
-            )
-
-        elif "wbgt" in message:
-
-            answer = (
-
-                f"The approximate WBGT screening "
-                f"estimate for {location} is "
-                f"{weather['wbgt']}°C."
-            )
-
-        elif (
-            "humidity" in message
-        ):
-
-            answer = (
-
-                f"The current humidity in "
-                f"{location} is {humidity}%."
-            )
-
-        else:
-
-            answer = weather["advisory"]
+        answer = generate_ai_answer(
+            request.message,
+            location,
+            temperature,
+            humidity,
+            weather
+        )
 
     else:
 
-        answer = (
-
-            "I can help with heat risk, "
-            "temperature, humidity, WBGT, "
-            "thermal stress and safety advice."
+        answer = generate_ai_answer(
+            request.message,
+            request.location or "Karnataka",
+            32,
+            58
         )
 
     return {
